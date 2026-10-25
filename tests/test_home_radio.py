@@ -106,7 +106,14 @@ def plays(fake):
 
 
 def last_url(fake):
-    return plays(fake)[-1][1]
+    """What the player was asked to play, with Home Radio's short YouTube redirect unwrapped."""
+    from custom_components.home_radio.stream_view import STREAM_PATH, resolve_token
+
+    url = plays(fake)[-1][1]
+    if url.startswith(STREAM_PATH):
+        assert len(url) < 200  # the whole point: VLC's telnet line limit is 1024
+        return resolve_token(fake.hass, url.rsplit("/", 1)[-1])
+    return url
 
 
 async def _target(hass, state, **attrs):
@@ -242,3 +249,25 @@ async def test_station_sync_from_tv(hass, aioclient_mock):
     st = hass.states.get(ENTITY)
     assert st.attributes["source_list"] == ["Δικός μου", "Vanilla"]
     assert st.attributes["stations"][0]["logo"] == ""
+
+
+async def test_youtube_redirect_view(hass, calls, hass_client_no_auth):
+    long_url = "https://rr1.googlevideo.com/videoplayback?" + "x" * 1100
+    with patch(f"{MP}.async_search", return_value=_tracks(1)),          patch(f"{MP}.async_resolve", return_value=ResolvedAudio(long_url, "T", "A", 200, "t")):
+        await hass.services.async_call(DOMAIN, "play_youtube", {"entity_id": ENTITY, "query": "x"}, blocking=True)
+    short = plays(calls)[-1][1]
+    assert short.startswith("/api/home_radio/yt/") and len(short) < 100
+    client = await hass_client_no_auth()
+    resp = await client.get(short, allow_redirects=False)
+    assert resp.status == 302 and resp.headers["Location"] == long_url
+    assert (await client.get("/api/home_radio/yt/nope", allow_redirects=False)).status == 404
+
+
+async def test_runaway_autoplay_stops(hass, calls):
+    """Tracks that die instantly (a player that can't open them) must not race through the queue."""
+    with patch(f"{MP}.async_search", return_value=_tracks(10)), patch(f"{MP}.async_resolve", side_effect=_resolved):
+        await hass.services.async_call(DOMAIN, "play_youtube", {"entity_id": ENTITY, "query": "x"}, blocking=True)
+        for _ in range(6):
+            await _target(hass, "playing")
+            await _target(hass, "idle")
+    assert len(plays(calls)) == 3

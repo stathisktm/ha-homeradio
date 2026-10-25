@@ -54,6 +54,7 @@ from .const import (
     YT_SEARCH_SIZE,
 )
 from .stations import StationStore
+from .stream_view import short_url
 from .youtube import ResolvedAudio, YoutubeTrack, async_resolve, async_search
 
 _LOGGER = logging.getLogger(__name__)
@@ -77,6 +78,10 @@ SUPPORTED = (
 
 SOURCE_YOUTUBE = "YouTube"
 MAX_SKIPS = 4
+# A track that "ends" this soon after starting really failed to play; this many in a row stops
+# autoplay instead of racing through the whole queue.
+QUICK_END_S = 8
+MAX_QUICK_ENDS = 3
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
@@ -131,6 +136,8 @@ class HomeRadioPlayer(MediaPlayerEntity):
         self._loading = False
         self._stopping = False
         self._seq = 0
+        self._started_at = 0.0
+        self._quick_ends = 0
 
     # ---- lifecycle -------------------------------------------------------------------------
 
@@ -154,7 +161,15 @@ class HomeRadioPlayer(MediaPlayerEntity):
             and old.state == STATE_PLAYING
             and new.state not in (STATE_PLAYING, STATE_PAUSED, STATE_BUFFERING, STATE_UNAVAILABLE, STATE_UNKNOWN)
         ):
-            self.hass.async_create_task(self._async_advance(1, autoplay=True))
+            quick = self.hass.loop.time() - self._started_at < QUICK_END_S
+            self._quick_ends = self._quick_ends + 1 if quick else 0
+            if self._quick_ends >= MAX_QUICK_ENDS:
+                _LOGGER.warning("home_radio: %d tracks in a row stopped right away on %s — autoplay paused",
+                                self._quick_ends, self._target)
+                self._quick_ends = 0
+                self._stopping = True
+            else:
+                self.hass.async_create_task(self._async_advance(1, autoplay=True))
         self.async_write_ha_state()
 
     # ---- mirrored state ---------------------------------------------------------------------
@@ -278,6 +293,7 @@ class HomeRadioPlayer(MediaPlayerEntity):
 
     async def _play_url(self, url: str) -> None:
         self._stopping = False
+        self._started_at = self.hass.loop.time()
         await self._send("play_media", {"media_content_id": url, "media_content_type": "music"})
 
     async def _async_start_station(self, station: dict[str, str]) -> None:
@@ -309,7 +325,8 @@ class HomeRadioPlayer(MediaPlayerEntity):
         self._now = resolved
         self._played.add(track.video_id)
         try:
-            await self._play_url(resolved.stream_url)
+            # Short HA-served redirect instead of the ~1100-char googlevideo URL — see stream_view.
+            await self._play_url(short_url(self.hass, resolved.stream_url))
         finally:
             self._loading = False
             self.async_write_ha_state()
