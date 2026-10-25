@@ -278,3 +278,36 @@ async def test_runaway_autoplay_stops(hass, calls):
             await _target(hass, "playing")
             await _target(hass, "idle")
     assert len(plays(calls)) == 3
+
+
+async def test_youtube_stream_via_ytdlp_session(hass, calls, hass_client_no_auth):
+    """The real path: bytes come through the yt-dlp opener that resolved the URL."""
+    import io as _io
+
+    seen = {}
+
+    class FakeResp:
+        status = 206
+        headers = {"Content-Type": "audio/webm", "Content-Range": "bytes 0-7999/8000"}
+
+        def __init__(self):
+            self._buf = _io.BytesIO(b"OPUS" * 2000)
+
+        def read(self, n):
+            return self._buf.read(n)
+
+        def close(self):
+            seen["closed"] = True
+
+    def opener(extra):
+        seen["extra"] = extra
+        return FakeResp()
+
+    audio = ResolvedAudio("https://rr.googlevideo.com/x?" + "y" * 1100, "T", "A", 200, "t", {}, opener, "diag")
+    with patch(f"{MP}.async_search", return_value=_tracks(1)), patch(f"{MP}.async_resolve", return_value=audio):
+        await hass.services.async_call(DOMAIN, "play_youtube", {"entity_id": ENTITY, "query": "x"}, blocking=True)
+    client = await hass_client_no_auth()
+    resp = await client.get(plays(calls)[-1][1], headers={"Range": "bytes=0-"})
+    assert resp.status == 206 and await resp.read() == b"OPUS" * 2000
+    assert resp.headers["Content-Range"] == "bytes 0-7999/8000"
+    assert seen == {"extra": {"Range": "bytes=0-"}, "closed": True}

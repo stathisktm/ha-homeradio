@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from collections import OrderedDict
 import secrets
+from typing import Any
 
 import aiohttp
 from aiohttp import web
@@ -32,16 +33,18 @@ _BROWSER_UA = (
 _PASS_HEADERS = ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Last-Modified", "ETag")
 
 
-def _tokens(hass: HomeAssistant) -> OrderedDict[str, tuple[str, dict[str, str]]]:
+def _tokens(hass: HomeAssistant) -> OrderedDict[str, tuple[str, dict[str, str], Any]]:
     return hass.data.setdefault(_KEY, OrderedDict())
 
 
-def short_url(hass: HomeAssistant, stream_url: str, headers: dict[str, str] | None = None) -> str:
-    """Registers [stream_url] (and the request headers yt-dlp says it needs) under a fresh
-    unguessable token and returns its short path."""
+def short_url(
+    hass: HomeAssistant, stream_url: str, headers: dict[str, str] | None = None, opener: Any = None,
+) -> str:
+    """Registers [stream_url] — with the request headers yt-dlp says it needs and, when given, the
+    yt-dlp opener that must fetch it — under a fresh unguessable token; returns its short path."""
     tokens = _tokens(hass)
     token = secrets.token_urlsafe(16)
-    tokens[token] = (stream_url, headers or {})
+    tokens[token] = (stream_url, headers or {}, opener)
     while len(tokens) > _MAX_TOKENS:
         tokens.popitem(last=False)
     return f"{STREAM_PATH}/{token}"
@@ -73,7 +76,9 @@ class YoutubeStreamView(HomeAssistantView):
         if entry is None:
             dlog(hass, f"VIEW unknown token ({who})")
             return web.Response(status=404)
-        url, extra = entry
+        url, extra, opener = entry
+        if opener is not None:
+            return await self._relay_ytdlp(hass, request, opener, body, who)
         headers = {"User-Agent": _BROWSER_UA, **extra}
         headers.pop("Accept-Encoding", None)
         if "Range" in request.headers:
@@ -106,4 +111,40 @@ class YoutubeStreamView(HomeAssistantView):
                 raise
         finally:
             upstream.release()
+        return response
+
+    async def _relay_ytdlp(self, hass: HomeAssistant, request: web.Request, opener: Any, body: bool, who: str) -> web.StreamResponse:
+        """Streams through the yt-dlp session that resolved the URL (blocking I/O, so each read
+        runs in the executor)."""
+        extra = {"Range": request.headers["Range"]} if "Range" in request.headers else {}
+        try:
+            upstream = await hass.async_add_executor_job(opener, extra)
+        except Exception as err:  # noqa: BLE001 - yt-dlp's HTTPError carries the status
+            status = getattr(getattr(err, "response", None), "status", None) or getattr(err, "status", None)
+            dlog(hass, f"VIEW yt-dlp fetch failed status={status} {type(err).__name__}: {str(err)[:160]} ({who})")
+            return web.Response(status=502)
+        status = getattr(upstream, "status", 200)
+        dlog(hass, f"VIEW {who} -> yt-dlp upstream {status} len={upstream.headers.get('Content-Length', '?')}")
+        response = web.StreamResponse(status=status)
+        for name in _PASS_HEADERS:
+            value = upstream.headers.get(name)
+            if value:
+                response.headers[name] = value
+        sent = 0
+        try:
+            await response.prepare(request)
+            if body and request.method != "HEAD":
+                while chunk := await hass.async_add_executor_job(upstream.read, _CHUNK):
+                    await response.write(chunk)
+                    sent += len(chunk)
+            await response.write_eof()
+            dlog(hass, f"VIEW relay finished, {sent} bytes")
+        except (ConnectionResetError, asyncio.CancelledError, aiohttp.ClientError) as err:
+            dlog(hass, f"VIEW relay ended after {sent} bytes: {type(err).__name__}")
+            if isinstance(err, asyncio.CancelledError):
+                raise
+        except Exception as err:  # noqa: BLE001 - a read error mid-stream just ends this response
+            dlog(hass, f"VIEW relay read error after {sent} bytes: {err!r}")
+        finally:
+            await hass.async_add_executor_job(upstream.close)
         return response

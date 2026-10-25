@@ -328,12 +328,12 @@ class HomeRadioPlayer(MediaPlayerEntity):
             else:
                 self.async_write_ha_state()
             return
-        dlog(self.hass, f"RESOLVE ok {track.url} url_len={len(resolved.stream_url)} headers={list(resolved.headers)}")
+        dlog(self.hass, f"RESOLVE ok {track.url} url_len={len(resolved.stream_url)} {resolved.diag}")
         self._now = resolved
         self._played.add(track.video_id)
         try:
             # Short HA-served redirect instead of the ~1100-char googlevideo URL — see stream_view.
-            await self._play_url(short_url(self.hass, resolved.stream_url, resolved.headers))
+            await self._play_url(short_url(self.hass, resolved.stream_url, resolved.headers, resolved.opener))
         finally:
             self._loading = False
             self.async_write_ha_state()

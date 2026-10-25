@@ -41,6 +41,11 @@ class ResolvedAudio:
     thumbnail: str
     # What yt-dlp says a request for stream_url must carry; the relay sends it upstream.
     headers: dict[str, str] = field(default_factory=dict)
+    # Opens stream_url through the SAME yt-dlp session that resolved it (same connection, IP
+    # family, cookies, headers). googlevideo URLs are bound to the requester; fetched any other
+    # way from the HA host they came back 403. Takes extra headers (Range), blocking.
+    opener: Any = None
+    diag: str = ""
 
 
 def _thumb(video_id: str) -> str:
@@ -73,19 +78,31 @@ def _search(query: str, size: int) -> list[YoutubeTrack]:
 
 def _resolve(url: str) -> ResolvedAudio | None:
     import yt_dlp
+    from yt_dlp.networking import Request
 
     opts = {"quiet": True, "no_warnings": True, "skip_download": True, "format": "bestaudio/best"}
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    # Deliberately not closed here: its network session is what the relay later streams through.
+    ydl = yt_dlp.YoutubeDL(opts)
+    info = ydl.extract_info(url, download=False)
     if not info or not info.get("url"):
+        ydl.close()
         return None
+    stream_url = info["url"]
+    headers = {k: v for k, v in (info.get("http_headers") or {}).items() if isinstance(v, str)}
+
+    def opener(extra: dict[str, str]):
+        return ydl.urlopen(Request(stream_url, headers={**headers, **extra}))
+
+    client = stream_url.split("&c=", 1)[1].split("&", 1)[0] if "&c=" in stream_url else "?"
     return ResolvedAudio(
-        stream_url=info["url"],
+        stream_url=stream_url,
         title=info.get("title") or "",
         channel=info.get("channel") or info.get("uploader") or "",
         duration=int(info.get("duration") or 0),
         thumbnail=_thumb(info["id"]) if info.get("id") else info.get("thumbnail") or "",
-        headers={k: v for k, v in (info.get("http_headers") or {}).items() if isinstance(v, str)},
+        headers=headers,
+        opener=opener,
+        diag=f"yt-dlp={yt_dlp.version.__version__} format={info.get('format_id')} client={client}",
     )
 
 
