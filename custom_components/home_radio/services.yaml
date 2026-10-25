@@ -1,0 +1,37 @@
+play_station:
+  target:
+    entity:
+      integration: home_radio
+      domain: media_player
+  fields:
+    station:
+      required: true
+      example: vanilla_radio
+      selector:
+        text:
+play_youtube:
+  target:
+    entity:
+      integration: home_radio
+      domain: media_player
+  fields:
+    query:
+      example: Παπακωνσταντίνου
+      selector:
+        text:
+    url:
+      example: https://www.youtube.com/watch?v=dQw4w9WgXcQ
+      selector:
+        text:
+search_youtube:
+  target:
+    entity:
+      integration: home_radio
+      domain: media_player
+  fields:
+    query:
+      required: true
+      example: Βασίλης Παπακωνσταντίνου
+      selector:
+        text:
+refresh_stations:

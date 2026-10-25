@@ -1,0 +1,102 @@
+"""YouTube search and audio-stream resolution through yt-dlp — the same trick the TV app does with
+NewPipeExtractor: find a video, hand the player its bare audio stream, never any video."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import logging
+from typing import Any
+
+from homeassistant.core import HomeAssistant
+
+_LOGGER = logging.getLogger(__name__)
+
+
+@dataclass
+class YoutubeTrack:
+    video_id: str
+    url: str
+    title: str
+    channel: str
+    duration: int
+    thumbnail: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "video_id": self.video_id,
+            "url": self.url,
+            "title": self.title,
+            "channel": self.channel,
+            "duration": self.duration,
+            "thumbnail": self.thumbnail,
+        }
+
+
+@dataclass
+class ResolvedAudio:
+    stream_url: str
+    title: str
+    channel: str
+    duration: int
+    thumbnail: str
+
+
+def _thumb(video_id: str) -> str:
+    return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+
+
+def _search(query: str, size: int) -> list[YoutubeTrack]:
+    import yt_dlp
+
+    opts = {"quiet": True, "no_warnings": True, "extract_flat": True, "skip_download": True}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(f"ytsearch{size}:{query}", download=False)
+    tracks = []
+    for entry in (info or {}).get("entries") or []:
+        video_id = entry.get("id")
+        if not video_id or entry.get("live_status") == "is_live":
+            continue
+        tracks.append(
+            YoutubeTrack(
+                video_id=video_id,
+                url=f"https://www.youtube.com/watch?v={video_id}",
+                title=entry.get("title") or "",
+                channel=entry.get("channel") or entry.get("uploader") or "",
+                duration=int(entry.get("duration") or 0),
+                thumbnail=_thumb(video_id),
+            )
+        )
+    return tracks
+
+
+def _resolve(url: str) -> ResolvedAudio | None:
+    import yt_dlp
+
+    opts = {"quiet": True, "no_warnings": True, "skip_download": True, "format": "bestaudio/best"}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    if not info or not info.get("url"):
+        return None
+    return ResolvedAudio(
+        stream_url=info["url"],
+        title=info.get("title") or "",
+        channel=info.get("channel") or info.get("uploader") or "",
+        duration=int(info.get("duration") or 0),
+        thumbnail=_thumb(info["id"]) if info.get("id") else info.get("thumbnail") or "",
+    )
+
+
+async def async_search(hass: HomeAssistant, query: str, size: int) -> list[YoutubeTrack]:
+    try:
+        return await hass.async_add_executor_job(_search, query, size)
+    except Exception:  # noqa: BLE001 - yt-dlp raises many types; a failed search is just empty
+        _LOGGER.exception("home_radio: YouTube search failed for %r", query)
+        return []
+
+
+async def async_resolve(hass: HomeAssistant, url: str) -> ResolvedAudio | None:
+    try:
+        return await hass.async_add_executor_job(_resolve, url)
+    except Exception:  # noqa: BLE001 - unavailable/age-restricted videos just get skipped
+        _LOGGER.warning("home_radio: could not resolve %s", url, exc_info=True)
+        return None

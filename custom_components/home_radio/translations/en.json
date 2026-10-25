@@ -1,0 +1,79 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Home Radio",
+        "description": "Plays the TV app's radio stations and YouTube through a player on this Home Assistant machine (the VLC add-on plays through its speakers).",
+        "data": {
+          "target": "Player that makes the sound",
+          "tv_urls": "TV radio app addresses (comma separated)"
+        },
+        "data_description": {
+          "target": "Usually media_player.vlc from the VLC add-on.",
+          "tv_urls": "e.g. http://192.168.1.20:8698 — the station list is read from here whenever the app is running, and remembered."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This player is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Home Radio",
+        "data": {
+          "target": "Player that makes the sound",
+          "tv_urls": "TV radio app addresses (comma separated)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "text": {
+      "youtube_search": {
+        "name": "YouTube"
+      }
+    }
+  },
+  "services": {
+    "play_station": {
+      "name": "Play station",
+      "description": "Plays one of the radio stations.",
+      "fields": {
+        "station": {
+          "name": "Station",
+          "description": "Station id or name."
+        }
+      }
+    },
+    "play_youtube": {
+      "name": "Play YouTube",
+      "description": "Searches YouTube and plays the first result, queueing the rest; or plays a video URL.",
+      "fields": {
+        "query": {
+          "name": "Search",
+          "description": "What to search for."
+        },
+        "url": {
+          "name": "Video URL",
+          "description": "A YouTube video to play (the search, if given, becomes its queue)."
+        }
+      }
+    },
+    "search_youtube": {
+      "name": "Search YouTube",
+      "description": "Returns YouTube results without playing anything.",
+      "fields": {
+        "query": {
+          "name": "Search",
+          "description": "What to search for."
+        }
+      }
+    },
+    "refresh_stations": {
+      "name": "Refresh stations",
+      "description": "Reads the station list from the TV app now."
+    }
+  }
+}

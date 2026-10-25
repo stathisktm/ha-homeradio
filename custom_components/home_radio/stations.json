@@ -1,0 +1,135 @@
+[
+ {
+  "id": "vanilla_radio",
+  "name": "Vanilla Radio",
+  "url": "https://stream.vanillaradio.com:8003/live",
+  "logo": "https://www.vanillaradio.com/wp-content/uploads/2016/04/vanilla-logo-300x100.png",
+  "category": "greek"
+ },
+ {
+  "id": "mad_radio",
+  "name": "Mad Radio 106.2",
+  "url": "https://mediaserver.mad.tv/stream",
+  "logo": "https://mad.tv/wp-content/uploads/2020/06/mad-dark.png",
+  "category": "greek"
+ },
+ {
+  "id": "athens_dj",
+  "name": "Athens DeeJay 95.2",
+  "url": "https://netradio.live24.gr/athensdeejay",
+  "logo": "https://www.atticaradios.gr/content/images/covers/deejay-player.jpg",
+  "category": "greek"
+ },
+ {
+  "id": "best_radio",
+  "name": "Best Radio",
+  "url": "http://best926live.mdc.akamaized.net/strmBest/userBest/chunks.m3u8",
+  "logo": "https://www.atticaradios.gr/content/images/covers/best-player.jpg",
+  "category": "greek"
+ },
+ {
+  "id": "fly_909",
+  "name": "Fly FM",
+  "url": "http://eco.onestreaming.com:8602/;",
+  "logo": "",
+  "category": "greek"
+ },
+ {
+  "id": "hit_fm",
+  "name": "Hit FM",
+  "url": "https://n10a-eu.rcs.revma.com/e4661aft4c3vv?rj-ttl=5&rj-tok=AAABnRbVaDAA1aczyKJ3F05MOw",
+  "logo": "https://resources.live24.gr/resources/images/stations/0ee12f2d-3bbc-4d01-befc-b8edc3c229b6.jpg",
+  "category": "greek"
+ },
+ {
+  "id": "pepper_963",
+  "name": "Pepper 96.6",
+  "url": "https://netradio.live24.gr/pepper9660",
+  "logo": "https://www.pepper966.gr/wp-content/uploads/2020/01/Pepper-radio-new-logo.jpg",
+  "category": "greek"
+ },
+ {
+  "id": "sfaira",
+  "name": "Sfera 102.2",
+  "url": "https://sfera.live24.gr/sfera4132",
+  "logo": "https://sfera.gr/assets/gifs/Sfera-gif.gif",
+  "category": "greek"
+ },
+ {
+  "id": "kiss_fm",
+  "name": "Kiss FM 92.9",
+  "url": "https://kissfm.live24.gr/kissfmathens",
+  "logo": "https://www.kiss929.gr/sites/all/themes/kiss/images/logo-kiss-2023.jpg",
+  "category": "greek"
+ },
+ {
+  "id": "lampsi_fm",
+  "name": "Lampsi FM 92.3",
+  "url": "https://az11.yesstreaming.net:8140/radio.mp3",
+  "logo": "https://cdn.e-radio.gr/logos/gr/big/lampsifm.png",
+  "category": "greek"
+ },
+ {
+  "id": "rythmos_fm",
+  "name": "Rythmos FM",
+  "url": "http://ample.radiojar.com/aw1w2xfx1vduv.mp3",
+  "logo": "https://api.soundis.gr/resized/streams/2024/01/29/rythmos-logo-red-star_a678fca2aee4e0439592c1be8bf9e5a9.png",
+  "category": "greek"
+ },
+ {
+  "id": "menta_radio",
+  "name": "Menta 88",
+  "url": "https://netradio.live24.gr/menta88ath",
+  "logo": "https://menta88.gr/wp-content/uploads/2021/12/-LOGO-02-2021-e1639364215612.jpg",
+  "category": "greek"
+ },
+ {
+  "id": "en_lefko",
+  "name": "En Lefko 87.7",
+  "url": "https://n12a-eu.rcs.revma.com/trm75ret4c3vv?rj-ttl=5&rj-tok=AAABnHLBW28A7OTR3a298An3Yg",
+  "logo": "https://mmo.aiircdn.com/342/5e62318b7f017.png",
+  "category": "greek"
+ },
+ {
+  "id": "dromos_fm",
+  "name": "Dromos 89.8",
+  "url": "https://netradio.live24.gr/dromos2",
+  "logo": "https://www.dromosfm.gr/wp-content/uploads/2017/03/dromosfmlogo3d-retina.png",
+  "category": "greek"
+ },
+ {
+  "id": "diesi_fm",
+  "name": "Diesi 101.3",
+  "url": "https://n05a-eu.rcs.revma.com/gkfwrhqxbfhvv",
+  "logo": "https://diesi.gr/wp-content/uploads/2024/03/favicon-2.png",
+  "category": "greek"
+ },
+ {
+  "id": "athens_party",
+  "name": "Athens Party",
+  "url": "https://link.onestreaming.com/athensparty",
+  "logo": "https://www.athensparty.com/_img/logos/athensparty.png",
+  "category": "greek"
+ },
+ {
+  "id": "melodia_fm",
+  "name": "Melodia FM 99.2",
+  "url": "https://stream.rcs.revma.com/8tdwa6ez1duvv",
+  "logo": "",
+  "category": "greek"
+ },
+ {
+  "id": "red_fm",
+  "name": "Red FM 96.3",
+  "url": "https://netradio.live24.gr/red9630",
+  "logo": "https://cdn.onlineradiobox.com/img/l/5/15525.v6.png",
+  "category": "greek"
+ },
+ {
+  "id": "sfera_fm",
+  "name": "Sfera FM",
+  "url": "https://sfera.live24.gr/sfera4132",
+  "logo": "https://sfera.gr/assets/gifs/Sfera-gif.gif",
+  "category": "greek"
+ }
+]

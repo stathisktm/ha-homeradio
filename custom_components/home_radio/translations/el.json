@@ -1,0 +1,79 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Home Radio",
+        "description": "Παίζει τους σταθμούς της εφαρμογής της TV και YouTube από player στο ίδιο το μηχάνημα του Home Assistant (το VLC add-on βγάζει τον ήχο στα ηχεία του).",
+        "data": {
+          "target": "Player που βγάζει τον ήχο",
+          "tv_urls": "Διευθύνσεις εφαρμογής ραδιοφώνου στις TV (με κόμμα)"
+        },
+        "data_description": {
+          "target": "Συνήθως media_player.vlc από το VLC add-on.",
+          "tv_urls": "π.χ. http://192.168.1.20:8698 — από εδώ διαβάζεται η λίστα σταθμών όποτε η εφαρμογή είναι ανοιχτή, και κρατιέται."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Αυτός ο player έχει ήδη ρυθμιστεί."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Home Radio",
+        "data": {
+          "target": "Player που βγάζει τον ήχο",
+          "tv_urls": "Διευθύνσεις εφαρμογής ραδιοφώνου στις TV (με κόμμα)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "text": {
+      "youtube_search": {
+        "name": "YouTube"
+      }
+    }
+  },
+  "services": {
+    "play_station": {
+      "name": "Παίξε σταθμό",
+      "description": "Παίζει έναν από τους σταθμούς.",
+      "fields": {
+        "station": {
+          "name": "Σταθμός",
+          "description": "Id ή όνομα σταθμού."
+        }
+      }
+    },
+    "play_youtube": {
+      "name": "Παίξε YouTube",
+      "description": "Ψάχνει στο YouTube, παίζει το πρώτο αποτέλεσμα και βάζει τα υπόλοιπα στην ουρά· ή παίζει ένα URL βίντεο.",
+      "fields": {
+        "query": {
+          "name": "Αναζήτηση",
+          "description": "Τι να ψάξει."
+        },
+        "url": {
+          "name": "URL βίντεο",
+          "description": "Βίντεο YouTube για αναπαραγωγή (η αναζήτηση, αν δοθεί, γίνεται η ουρά του)."
+        }
+      }
+    },
+    "search_youtube": {
+      "name": "Αναζήτηση YouTube",
+      "description": "Επιστρέφει αποτελέσματα χωρίς να παίξει τίποτα.",
+      "fields": {
+        "query": {
+          "name": "Αναζήτηση",
+          "description": "Τι να ψάξει."
+        }
+      }
+    },
+    "refresh_stations": {
+      "name": "Ανανέωση σταθμών",
+      "description": "Διαβάζει τώρα τη λίστα σταθμών από την εφαρμογή της TV."
+    }
+  }
+}

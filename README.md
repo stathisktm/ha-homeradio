@@ -1,0 +1,57 @@
+# Home Radio 📻
+
+**Ραδιόφωνο και YouTube που παίζουν από το ίδιο το Home Assistant**, από τα ηχεία του μηχανήματος όπου τρέχει. Έχει τους ίδιους σταθμούς με την εφαρμογή ραδιοφώνου της TV και το ίδιο κόλπο με το YouTube: ψάχνεις τραγούδι, παίζει μόνο ο ήχος, και όταν τελειώσει συνεχίζει μόνο του στο επόμενο.
+
+*Radio stations and YouTube music played by Home Assistant itself through the host's speakers (via the VLC add-on), as a full `media_player` with its own dashboard card.*
+
+![Home Radio card](screenshot.png)
+
+## Τι κάνει
+- **`media_player.home_radio`**: κανονικός media player με όλους τους σταθμούς ως **sources**, Play/Pause/Stop, επόμενο/προηγούμενο, ένταση, εξώφυλλα και **Media Browser** (σταθμοί, πρόσφατες αναζητήσεις, ουρά).
+- **Ραδιόφωνο:** δείχνει το τραγούδι που παίζει τώρα (ICY «Artist - Track») όταν ο σταθμός το στέλνει.
+- **YouTube:** αναζήτηση → παίζει το πρώτο και βάζει τα υπόλοιπα στην **ουρά**. Στο τέλος κάθε τραγουδιού πάει στο επόμενο, παραλείποντας ό,τι δεν μοιάζει με τραγούδι (κάτω από 30″ ή πάνω από 12′), και ψάχνει μόνο του για περισσότερα όταν τελειώσει η ουρά.
+- **`text.home_radio_youtube`**: γράφεις κάτι και παίζει, από dashboard, script ή Assist.
+- **Κάρτα `custom:home-radio-card`**: μεγάλο Now Playing με θολωμένο εξώφυλλο στο φόντο, πλέγμα σταθμών, αναζήτηση YouTube και ουρά. Φορτώνεται αυτόματα, χωρίς να προσθέσεις resource.
+- **Σταθμοί από την TV:** αν η εφαρμογή ραδιοφώνου της TV είναι ανοιχτή, η λίστα (με δικούς σου σταθμούς και μετονομασίες) διαβάζεται από εκεί και κρατιέται. Αλλιώς χρησιμοποιείται η ενσωματωμένη λίστα.
+
+## Τι χρειάζεται
+- **VLC add-on** (Ρυθμίσεις → Add-ons → VLC) και το integration **VLC Telnet** (δημιουργεί το `media_player.vlc`). Το VLC παίζει από την έξοδο ήχου του μηχανήματος του HA. Μπορείς να διαλέξεις και οποιονδήποτε άλλο media player.
+
+## Εγκατάσταση (HACS)
+1. **HACS → ⋮ → Custom repositories** → `https://github.com/stathisktm/ha-homeradio`, τύπος **Integration**.
+2. **Home Radio** → **Download** → επανεκκίνηση Home Assistant.
+3. **Ρυθμίσεις → Συσκευές & υπηρεσίες → Προσθήκη → Home Radio**. Προτείνει μόνο του το `media_player.vlc` και τις TV σου.
+4. Στο dashboard πρόσθεσε κάρτα:
+   ```yaml
+   type: custom:home-radio-card
+   ```
+
+## Ενέργειες
+```yaml
+action: home_radio.play_station
+target: { entity_id: media_player.home_radio }
+data: { station: "Fly FM" }          # id ή όνομα
+---
+action: home_radio.play_youtube
+target: { entity_id: media_player.home_radio }
+data: { query: "Βασίλης Παπακωνσταντίνου" }   # ή url: https://www.youtube.com/watch?v=...
+---
+action: home_radio.search_youtube     # επιστρέφει αποτελέσματα, δεν παίζει
+target: { entity_id: media_player.home_radio }
+data: { query: "lofi" }
+---
+action: home_radio.refresh_stations   # ξαναδιαβάζει τους σταθμούς από την TV
+```
+Επίσης `media_player.select_source` (όνομα σταθμού) και `media_player.play_media` με `station:<id>`, `ytq:<αναζήτηση>`, URL YouTube ή οποιοδήποτε URL ροής.
+
+## Δοκιμές
+```bash
+pip install pytest-homeassistant-custom-component
+pytest
+```
+
+## Δείτε επίσης
+[ha-tvcam](https://github.com/stathisktm/ha-tvcam) · [ha-tvpicture](https://github.com/stathisktm/ha-tvpicture) · [ha-tvchannel](https://github.com/stathisktm/ha-tvchannel)
+
+## Άδεια
+[MIT](LICENSE). Το εικονίδιο είναι από τα [Noto Emoji](https://github.com/googlefonts/noto-emoji) (Apache 2.0).
