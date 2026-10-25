@@ -3,7 +3,7 @@ NewPipeExtractor: find a video, hand the player its bare audio stream, never any
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 from typing import Any
 
@@ -39,6 +39,8 @@ class ResolvedAudio:
     channel: str
     duration: int
     thumbnail: str
+    # What yt-dlp says a request for stream_url must carry; the relay sends it upstream.
+    headers: dict[str, str] = field(default_factory=dict)
 
 
 def _thumb(video_id: str) -> str:
@@ -83,6 +85,7 @@ def _resolve(url: str) -> ResolvedAudio | None:
         channel=info.get("channel") or info.get("uploader") or "",
         duration=int(info.get("duration") or 0),
         thumbnail=_thumb(info["id"]) if info.get("id") else info.get("thumbnail") or "",
+        headers={k: v for k, v in (info.get("http_headers") or {}).items() if isinstance(v, str)},
     )
 
 

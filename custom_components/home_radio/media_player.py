@@ -54,6 +54,7 @@ from .const import (
     YT_SEARCH_SIZE,
 )
 from .stations import StationStore
+from .debuglog import dlog
 from .stream_view import short_url
 from .youtube import ResolvedAudio, YoutubeTrack, async_resolve, async_search
 
@@ -150,6 +151,9 @@ class HomeRadioPlayer(MediaPlayerEntity):
     @callback
     def _on_target_change(self, event: Event[EventStateChangedData]) -> None:
         old, new = event.data["old_state"], event.data["new_state"]
+        if old is None or new is None or old.state != new.state:
+            dlog(self.hass, f"TARGET {old.state if old else None} -> {new.state if new else None} "
+                            f"title={new.attributes.get('media_title') if new else None!r} kind={self._kind}")
         # A YouTube track that ran out (playing -> idle, not something we stopped) continues
         # with the next one, like the TV app's autoplay.
         if (
@@ -292,6 +296,7 @@ class HomeRadioPlayer(MediaPlayerEntity):
         )
 
     async def _play_url(self, url: str) -> None:
+        dlog(self.hass, f"PLAY {self._target} <- {url[:120]}")
         self._stopping = False
         self._started_at = self.hass.loop.time()
         await self._send("play_media", {"media_content_id": url, "media_content_type": "music"})
@@ -316,17 +321,19 @@ class HomeRadioPlayer(MediaPlayerEntity):
         if seq != self._seq:
             return  # something else was asked for meanwhile
         if resolved is None:
+            dlog(self.hass, f"RESOLVE failed {track.url}")
             self._loading = False
             if skips < MAX_SKIPS and index + 1 < len(self._queue):
                 await self._async_play_queue_item(index + 1, skips + 1)
             else:
                 self.async_write_ha_state()
             return
+        dlog(self.hass, f"RESOLVE ok {track.url} url_len={len(resolved.stream_url)} headers={list(resolved.headers)}")
         self._now = resolved
         self._played.add(track.video_id)
         try:
             # Short HA-served redirect instead of the ~1100-char googlevideo URL — see stream_view.
-            await self._play_url(short_url(self.hass, resolved.stream_url))
+            await self._play_url(short_url(self.hass, resolved.stream_url, resolved.headers))
         finally:
             self._loading = False
             self.async_write_ha_state()

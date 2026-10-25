@@ -251,16 +251,23 @@ async def test_station_sync_from_tv(hass, aioclient_mock):
     assert st.attributes["stations"][0]["logo"] == ""
 
 
-async def test_youtube_redirect_view(hass, calls, hass_client_no_auth):
+async def test_youtube_stream_is_relayed(hass, aioclient_mock, calls, hass_client_no_auth):
     long_url = "https://rr1.googlevideo.com/videoplayback?" + "x" * 1100
-    with patch(f"{MP}.async_search", return_value=_tracks(1)),          patch(f"{MP}.async_resolve", return_value=ResolvedAudio(long_url, "T", "A", 200, "t")):
+    aioclient_mock.get(long_url, content=b"OPUSDATA" * 1000, headers={"Content-Type": "audio/webm"})
+    with patch(f"{MP}.async_search", return_value=_tracks(1)),          patch(f"{MP}.async_resolve", return_value=ResolvedAudio(long_url, "T", "A", 200, "t", {"User-Agent": "yt"})):
         await hass.services.async_call(DOMAIN, "play_youtube", {"entity_id": ENTITY, "query": "x"}, blocking=True)
     short = plays(calls)[-1][1]
     assert short.startswith("/api/home_radio/yt/") and len(short) < 100
     client = await hass_client_no_auth()
-    resp = await client.get(short, allow_redirects=False)
-    assert resp.status == 302 and resp.headers["Location"] == long_url
-    assert (await client.get("/api/home_radio/yt/nope", allow_redirects=False)).status == 404
+    resp = await client.get(short, headers={"Range": "bytes=0-"})
+    assert resp.status == 200 and await resp.read() == b"OPUSDATA" * 1000
+    assert resp.headers["Content-Type"] == "audio/webm"
+    sent = aioclient_mock.mock_calls[-1]
+    assert sent[3]["User-Agent"] == "yt" and sent[3]["Range"] == "bytes=0-"
+    assert (await client.get("/api/home_radio/yt/nope")).status == 404
+    await hass.async_block_till_done()
+    log = open(hass.config.path("home_radio_debug.log"), encoding="utf-8").read()
+    assert "PLAY media_player.vlc <- /api/home_radio/yt/" in log and "upstream 200" in log
 
 
 async def test_runaway_autoplay_stops(hass, calls):
