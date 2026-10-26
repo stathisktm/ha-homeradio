@@ -132,7 +132,7 @@ class RemotePlayer(looper: Looper) : SimpleBasePlayer(looper) {
     }
 
     override fun handleSetDeviceVolume(deviceVolume: Int, flags: Int): ListenableFuture<*> {
-        HaHub.mediaPlayer("volume_set", mapOf("volume_level" to deviceVolume.coerceIn(0, 100) / 100.0))
+        HaHub.setVolume(deviceVolume)
         return done()
     }
 
@@ -141,8 +141,8 @@ class RemotePlayer(looper: Looper) : SimpleBasePlayer(looper) {
     override fun handleDecreaseDeviceVolume(flags: Int): ListenableFuture<*> = stepVolume(-5)
 
     private fun stepVolume(delta: Int): ListenableFuture<*> {
-        val now = ((es?.num("volume_level") ?: 0.5) * 100).roundToInt()
-        return handleSetDeviceVolume((now + delta).coerceIn(0, 100), 0)
+        HaHub.stepVolume(delta)
+        return done()
     }
 
     override fun handleSetDeviceMuted(muted: Boolean, flags: Int): ListenableFuture<*> {

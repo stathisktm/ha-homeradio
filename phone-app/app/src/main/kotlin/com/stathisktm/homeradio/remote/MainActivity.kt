@@ -2,6 +2,8 @@ package com.stathisktm.homeradio.remote
 
 import android.Manifest
 import android.content.ComponentName
+import android.content.Intent
+import android.provider.Settings as AndroidSettings
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -48,6 +50,8 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
@@ -59,6 +63,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
@@ -135,6 +140,7 @@ class MainActivity : ComponentActivity() {
                 }
                 if (showSettings) item(span = { GridItemSpan(maxLineSpan) }) { Settings(prefs) { showSettings = false } }
                 item(span = { GridItemSpan(maxLineSpan) }) { NowPlaying(s) }
+                item(span = { GridItemSpan(maxLineSpan) }) { VolumeKeys(prefs) }
                 item(span = { GridItemSpan(maxLineSpan) }) { YoutubeSearch() }
                 val stations = s?.list("stations").orEmpty().mapNotNull { it as? JsonObject }
                 if (stations.isNotEmpty()) {
@@ -214,7 +220,7 @@ class MainActivity : ComponentActivity() {
                         value = dragging ?: haVolume,
                         onValueChange = { dragging = it },
                         onValueChangeFinished = {
-                            dragging?.let { HaHub.mediaPlayer("volume_set", mapOf("volume_level" to it.toDouble())) }
+                            dragging?.let { HaHub.setVolume((it * 100).toInt()) }
                             dragging = null
                         },
                         modifier = Modifier.weight(1f).padding(start = 8.dp),
@@ -229,6 +235,38 @@ class MainActivity : ComponentActivity() {
         FilledIconButton(onClick = onClick, modifier = Modifier.size(48.dp),
             colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.White.copy(alpha = 0.16f), contentColor = Color.White),
         ) { content() }
+    }
+
+    /** Hardware volume keys -> Home Radio needs the accessibility service switched on once. */
+    @Composable
+    private fun VolumeKeys(prefs: Prefs) {
+        var enabled by remember { mutableStateOf(VolumeKeyService.isEnabled(this)) }
+        var wanted by remember { mutableStateOf(prefs.volumeKeys) }
+        // Re-check when coming back from the system's accessibility settings.
+        LifecycleResumeEffect(Unit) {
+            enabled = VolumeKeyService.isEnabled(this@MainActivity)
+            onPauseOrDispose { }
+        }
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+            Column(Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Πλήκτρα έντασης κινητού", fontWeight = FontWeight.Bold)
+                        Text(
+                            if (enabled) "Όσο παίζει το Home Radio, αλλάζουν την ένταση των ηχείων του HA — και στην οθόνη κλειδώματος."
+                            else "Χρειάζεται να ενεργοποιήσεις μία φορά την υπηρεσία «Home Radio: πλήκτρα έντασης» στην Προσβασιμότητα.",
+                            fontSize = 12.sp, color = Color.Gray,
+                        )
+                    }
+                    if (enabled) Switch(checked = wanted, onCheckedChange = { wanted = it; prefs.volumeKeys = it })
+                }
+                if (!enabled) {
+                    TextButton(onClick = {
+                        startActivity(Intent(AndroidSettings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    }) { Text("Άνοιγμα Προσβασιμότητας") }
+                }
+            }
+        }
     }
 
     @Composable

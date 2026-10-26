@@ -201,6 +201,29 @@ object HaHub {
 
     fun mediaPlayer(service: String, data: Map<String, Any> = emptyMap()) = call("media_player", service, data)
 
+    // Several quick volume presses arrive faster than HA reports back the new level, so each step
+    // builds on the last level asked for (for a moment) rather than on the not-yet-updated state.
+    private var pendingVolume: Int? = null
+    private var pendingAtMs = 0L
+
+    fun volumePercent(): Int {
+        val reported = ((_state.value?.num("volume_level") ?: 0.5) * 100).toInt()
+        return pendingVolume?.takeIf { System.currentTimeMillis() - pendingAtMs < 2_000 } ?: reported
+    }
+
+    /** Sets HA's volume to [percent] (0..100) and returns it. */
+    fun setVolume(percent: Int): Int {
+        val v = percent.coerceIn(0, 100)
+        pendingVolume = v
+        pendingAtMs = System.currentTimeMillis()
+        mediaPlayer("volume_set", mapOf("volume_level" to v / 100.0))
+        return v
+    }
+
+    fun stepVolume(delta: Int): Int = setVolume(volumePercent() + delta)
+
+    val isPlaying: Boolean get() = _state.value?.state == "playing"
+
     fun togglePlay() {
         if (_state.value?.state == "playing") mediaPlayer("media_pause") else mediaPlayer("media_play")
     }
