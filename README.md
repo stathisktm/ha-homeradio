@@ -10,6 +10,8 @@
 - **`media_player.home_radio`**: κανονικός media player με όλους τους σταθμούς ως **sources**, Play/Pause/Stop, επόμενο/προηγούμενο, ένταση, εξώφυλλα και **Media Browser** (σταθμοί, πρόσφατες αναζητήσεις, ουρά).
 - **Ραδιόφωνο:** δείχνει το τραγούδι που παίζει τώρα (ICY «Artist - Track») όταν ο σταθμός το στέλνει.
 - **YouTube:** αναζήτηση → παίζει το πρώτο και βάζει τα υπόλοιπα στην **ουρά**. Στο τέλος κάθε τραγουδιού πάει στο επόμενο, παραλείποντας ό,τι δεν μοιάζει με τραγούδι (κάτω από 30″ ή πάνω από 12′), και ψάχνει μόνο του για περισσότερα όταν τελειώσει η ουρά.
+- **Λίστες Spotify, χωρίς Spotify:** επικολλάς link λίστας, άλμπουμ ή τραγουδιού Spotify (από Κοινοποίηση → Αντιγραφή συνδέσμου) στην αναζήτηση. Τα τραγούδια μπαίνουν στην ουρά και καθένα παίζει από το YouTube, ταιριασμένο με τη διάρκειά του. Δεν χρειάζεται λογαριασμός ή Premium. Διαβάζεται η δημόσια σελίδα «embed» του Spotify, άρα η λίστα πρέπει να είναι δημόσια και έρχονται έως 100 τραγούδια.
+- **Cast από το κινητό:** με το add-on [Home Cast](https://github.com/stathisktm/ha-homecast), το κουμπί Cast του YouTube / YouTube Music παίζει εδώ.
 - **`text.home_radio_youtube`**: γράφεις κάτι και παίζει, από dashboard, script ή Assist.
 - **Κάρτα `custom:home-radio-card`**: μεγάλο Now Playing με θολωμένο εξώφυλλο στο φόντο, πλέγμα σταθμών, αναζήτηση YouTube και ουρά. Φορτώνεται αυτόματα, χωρίς να προσθέσεις resource.
 - **Σταθμοί από την TV:** αν η εφαρμογή ραδιοφώνου της TV είναι ανοιχτή, η λίστα (με δικούς σου σταθμούς και μετονομασίες) διαβάζεται από εκεί και κρατιέται. Αλλιώς χρησιμοποιείται η ενσωματωμένη λίστα.
@@ -45,13 +47,17 @@ action: home_radio.play_youtube
 target: { entity_id: media_player.home_radio }
 data: { query: "Βασίλης Παπακωνσταντίνου" }   # ή url: https://www.youtube.com/watch?v=...
 ---
+action: home_radio.play_spotify       # λίστα / άλμπουμ / τραγούδι Spotify, παίζει από YouTube
+target: { entity_id: media_player.home_radio }
+data: { url: "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M" }
+---
 action: home_radio.search_youtube     # επιστρέφει αποτελέσματα, δεν παίζει
 target: { entity_id: media_player.home_radio }
 data: { query: "lofi" }
 ---
 action: home_radio.refresh_stations   # ξαναδιαβάζει τους σταθμούς από την TV
 ```
-Επίσης `media_player.select_source` (όνομα σταθμού) και `media_player.play_media` με `station:<id>`, `ytq:<αναζήτηση>`, URL YouTube ή οποιοδήποτε URL ροής.
+Επίσης `media_player.select_source` (όνομα σταθμού) και `media_player.play_media` με `station:<id>`, `ytq:<αναζήτηση>`, `queue:<θέση>`, link Spotify, URL YouTube ή οποιοδήποτε URL ροής.
 
 ## Δοκιμές
 ```bash

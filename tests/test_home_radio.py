@@ -345,3 +345,75 @@ async def test_cast_unresolvable_says_not_ok(hass, calls):
         res = await hass.services.async_call(DOMAIN, "play_cast", {"entity_id": ENTITY, "video_id": "bad"},
                                              blocking=True, return_response=True)
     assert res[ENTITY]["ok"] is False
+
+
+# ---- Spotify links ---------------------------------------------------------------------------
+
+from pathlib import Path
+
+from custom_components.home_radio import spotify
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _fixture(name):
+    return (FIXTURES / name).read_text(encoding="utf-8")
+
+
+def test_spotify_links_and_embed_parsing():
+    assert spotify.parse_link("https://open.spotify.com/intl-el/playlist/37i9dQZF1DXcBWIGoYBM5M?si=ab") == (
+        "playlist", "37i9dQZF1DXcBWIGoYBM5M")
+    assert spotify.parse_link("Άκου αυτό στο Spotify: https://open.spotify.com/album/4LH4d3cOWNNsVw41Gqt2kv") == (
+        "album", "4LH4d3cOWNNsVw41Gqt2kv")
+    assert spotify.parse_link("spotify:track:2sFepQNyl1WjpROruP8bJ0") == ("track", "2sFepQNyl1WjpROruP8bJ0")
+    assert spotify.parse_link("Παπακωνσταντίνου") is None
+
+    pl = spotify.parse_embed(_fixture("spotify_playlist.html"))
+    assert pl.kind == "playlist" and len(pl.songs) == 5 and pl.image.startswith("https://i.scdn.co/")
+    assert pl.songs[0].title == "Housewife" and pl.songs[0].artists == "Tate McRae" and pl.songs[0].duration == 208
+    al = spotify.parse_embed(_fixture("spotify_album.html"))
+    assert al.name == "The Dark Side of the Moon" and al.songs[0].query == "Pink Floyd - Speak to Me"
+    tr = spotify.parse_embed(_fixture("spotify_track.html"))
+    assert tr.kind == "track" and len(tr.songs) == 1 and tr.songs[0].artists == "Tate McRae"
+
+
+async def test_spotify_playlist_plays_from_youtube(hass, aioclient_mock, calls):
+    aioclient_mock.get("https://open.spotify.com/embed/playlist/37i9dQZF1DXcBWIGoYBM5M",
+                       text=_fixture("spotify_playlist.html"))
+    searches = []
+
+    async def search(hass_, query, size):
+        searches.append(query)
+        # a 15-minute mix first, then a song-length upload
+        return [YoutubeTrack("long", "https://www.youtube.com/watch?v=long", "x", "c", 900, "t"),
+                YoutubeTrack(f"ok{len(searches)}", f"https://www.youtube.com/watch?v=ok{len(searches)}",
+                             "x (Official Video)", "VEVO", 205, "thumb")]
+
+    with patch(f"{MP}.async_search", side_effect=search), patch(f"{MP}.async_resolve", side_effect=_resolved):
+        # pasted into the YouTube search box, with the app's share text around it
+        await hass.services.async_call(DOMAIN, "play_youtube", {
+            "entity_id": ENTITY,
+            "query": "Today's Top Hits https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=1"}, blocking=True)
+        await hass.async_block_till_done()
+        assert searches[0] == "Tate McRae - Housewife"
+        assert last_url(calls) == "https://audio/ok1"  # the one about as long as the song
+        st = hass.states.get(ENTITY)
+        assert st.attributes["media_title"] == "Housewife" and st.attributes["media_artist"] == "Tate McRae"
+        assert st.attributes["queue_name"] and len(st.attributes["queue"]) == 5
+        # the next song was looked up ahead of time
+        assert len(searches) == 2 and st.attributes["queue"][1]["video_id"] == "ok2"
+        # the song ends -> the next one, no new search needed for it
+        await _target(hass, "playing")
+        await _target(hass, "idle")
+        assert last_url(calls) == "https://audio/ok2"
+        # tapping a later song in the queue
+        await hass.services.async_call("media_player", "play_media", {
+            "entity_id": ENTITY, "media_content_id": "queue:4", "media_content_type": "music"}, blocking=True)
+        assert hass.states.get(ENTITY).attributes["queue_index"] == 4
+
+
+async def test_spotify_unreadable_link_raises(hass, aioclient_mock, calls):
+    aioclient_mock.get("https://open.spotify.com/embed/album/4LH4d3cOWNNsVw41Gqt2kv", status=404)
+    with pytest.raises(Exception, match="Spotify"):
+        await hass.services.async_call(DOMAIN, "play_spotify", {
+            "entity_id": ENTITY, "url": "https://open.spotify.com/album/4LH4d3cOWNNsVw41Gqt2kv"}, blocking=True)

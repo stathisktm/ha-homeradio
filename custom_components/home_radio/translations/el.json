@@ -92,6 +92,16 @@
           "description": "Το κινητό που το έστειλε."
         }
       }
+    },
+    "play_spotify": {
+      "name": "Αναπαραγωγή link Spotify",
+      "description": "Παίζει λίστα, άλμπουμ ή τραγούδι του Spotify (το link από την Κοινοποίηση της εφαρμογής) από το YouTube. Δεν χρειάζεται λογαριασμός Spotify· από λίστες έρχονται έως 100 τραγούδια.",
+      "fields": {
+        "url": {
+          "name": "Link Spotify",
+          "description": "open.spotify.com/playlist/…, /album/… ή /track/…"
+        }
+      }
     }
   }
 }

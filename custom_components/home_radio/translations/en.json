@@ -92,6 +92,16 @@
           "description": "The phone that cast it."
         }
       }
+    },
+    "play_spotify": {
+      "name": "Play Spotify link",
+      "description": "Plays a Spotify playlist, album or song (link as shared from the Spotify app) from YouTube. No Spotify account needed; playlists give up to 100 songs.",
+      "fields": {
+        "url": {
+          "name": "Spotify link",
+          "description": "open.spotify.com/playlist/…, /album/… or /track/…"
+        }
+      }
     }
   }
 }

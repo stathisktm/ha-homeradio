@@ -47,14 +47,18 @@ from .const import (
     KIND_YOUTUBE,
     RECENT_SEARCHES,
     SERVICE_PLAY_CAST,
+    SERVICE_PLAY_SPOTIFY,
     SERVICE_PLAY_STATION,
     SERVICE_PLAY_YOUTUBE,
     SERVICE_SEARCH_YOUTUBE,
+    SPOTIFY_MATCH_RESULTS,
+    SPOTIFY_MATCH_TOLERANCE_S,
     YT_MORE_SIZE,
     YT_MUSIC_MAX_S,
     YT_MUSIC_MIN_S,
     YT_SEARCH_SIZE,
 )
+from . import spotify
 from .stations import StationStore
 from .debuglog import dlog
 from .stream_view import short_url
@@ -121,6 +125,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         "async_play_cast",
         supports_response=SupportsResponse.OPTIONAL,
     )
+    platform.async_register_entity_service(
+        SERVICE_PLAY_SPOTIFY, {vol.Required("url"): cv.string}, "async_play_spotify",
+    )
 
 
 class HomeRadioPlayer(MediaPlayerEntity):
@@ -156,6 +163,8 @@ class HomeRadioPlayer(MediaPlayerEntity):
         self._quick_ends = 0
         # Set while the current track came from a phone casting through the Home Cast add-on.
         self._cast_sender: str | None = None
+        # Name of the Spotify playlist/album the queue came from.
+        self._list_name: str | None = None
 
     # ---- lifecycle -------------------------------------------------------------------------
 
@@ -308,6 +317,7 @@ class HomeRadioPlayer(MediaPlayerEntity):
             ],
             "target": self._target,
             "cast_sender": self._cast_sender,
+            "queue_name": self._list_name if self._kind == KIND_YOUTUBE else None,
         }
 
     # ---- playing -----------------------------------------------------------------------------
@@ -351,11 +361,12 @@ class HomeRadioPlayer(MediaPlayerEntity):
         self._kind, self._index, self._loading = KIND_YOUTUBE, index, True
         self._now = ResolvedAudio("", track.title, track.channel, track.duration, track.thumbnail)
         self.async_write_ha_state()
-        resolved = await async_resolve(self.hass, track.url)
+        found = await self._async_match(track)
+        resolved = await async_resolve(self.hass, track.url) if found and seq == self._seq else None
         if seq != self._seq:
             return  # something else was asked for meanwhile
         if resolved is None:
-            dlog(self.hass, f"RESOLVE failed {track.url}")
+            dlog(self.hass, f"RESOLVE failed {track.url or track.query}")
             self._loading = False
             if skips < MAX_SKIPS and index + 1 < len(self._queue):
                 await self._async_play_queue_item(index + 1, skips + 1)
@@ -363,7 +374,14 @@ class HomeRadioPlayer(MediaPlayerEntity):
                 self.async_write_ha_state()
             return
         dlog(self.hass, f"RESOLVE ok {track.url} url_len={len(resolved.stream_url)} {resolved.diag}")
+        if track.query:
+            # Spotify's clean title and artist rather than the YouTube upload's "(Official Video)".
+            resolved.title, resolved.channel = track.title, track.channel
         self._now = resolved
+        nxt = self._queue[index + 1] if index + 1 < len(self._queue) else None
+        if nxt is not None and nxt.query and not nxt.video_id:
+            # Look the next song up now, so it starts without the search delay.
+            self.hass.async_create_task(self._async_match(nxt))
         self._played.add(track.video_id)
         try:
             # Short HA-served redirect instead of the ~1100-char googlevideo URL — see stream_view.
@@ -371,6 +389,24 @@ class HomeRadioPlayer(MediaPlayerEntity):
         finally:
             self._loading = False
             self.async_write_ha_state()
+
+    async def _async_match(self, track: YoutubeTrack) -> bool:
+        """Finds a Spotify song on YouTube: the first result about as long as the song."""
+        if track.video_id:
+            return True
+        results = await async_search(self.hass, track.query, SPOTIFY_MATCH_RESULTS)
+        if track.video_id:
+            return True  # found meanwhile by the look-ahead
+        if not results:
+            return False
+        close = [t for t in results if track.duration and t.duration
+                 and abs(t.duration - track.duration) <= SPOTIFY_MATCH_TOLERANCE_S]
+        music = [t for t in results if YT_MUSIC_MIN_S <= t.duration <= YT_MUSIC_MAX_S]
+        best = (close or music or results)[0]
+        track.video_id, track.url, track.thumbnail = best.video_id, best.url, best.thumbnail
+        if not track.duration:
+            track.duration = best.duration
+        return True
 
     async def _async_more_for_queue(self) -> bool:
         """Autoplay ran past the results: fetch a bigger page for the same search (or one built
@@ -390,7 +426,9 @@ class HomeRadioPlayer(MediaPlayerEntity):
             nxt = self._index + step
             if autoplay:
                 # Skip non-music-length results on the way, as the TV app does.
-                while 0 <= nxt < len(self._queue) and not (YT_MUSIC_MIN_S <= self._queue[nxt].duration <= YT_MUSIC_MAX_S):
+                # (Spotify songs are songs already.)
+                while 0 <= nxt < len(self._queue) and not self._queue[nxt].query \
+                        and not (YT_MUSIC_MIN_S <= self._queue[nxt].duration <= YT_MUSIC_MAX_S):
                     nxt += 1
             if nxt >= len(self._queue) and step > 0 and not await self._async_more_for_queue():
                 return
@@ -425,6 +463,9 @@ class HomeRadioPlayer(MediaPlayerEntity):
         it came from, as the card sends it) plays that video with the search as its queue."""
         if not query and not url:
             raise HomeAssistantError("Δώσε query ή url")
+        if spotify.is_link(url or "") or (not url and spotify.is_link(query or "")):
+            await self.async_play_spotify(url or query or "")
+            return
         if query and not url and query.startswith(("http://", "https://")) and "youtu" in query:
             url, query = query, None
         results: list[YoutubeTrack] = []
@@ -443,15 +484,29 @@ class HomeRadioPlayer(MediaPlayerEntity):
         if not results:
             raise HomeAssistantError(f"Δεν βρέθηκαν αποτελέσματα για: {query}")
         self._end_cast()
-        self._query = query
+        self._query, self._list_name = query, None
         self._queue, self._played = list(results), set()
         await self._async_play_queue_item(start)
+
+    async def async_play_spotify(self, url: str) -> None:
+        """A Spotify playlist, album or song (the link as shared from the app): its songs become
+        the queue, each one played from YouTube. No Spotify account is involved."""
+        found = await spotify.async_fetch(self.hass, url)
+        if found is None or not found.songs:
+            raise HomeAssistantError("Δεν μπόρεσα να διαβάσω αυτό το link του Spotify (είναι δημόσια η λίστα;)")
+        dlog(self.hass, f"SPOTIFY {found.kind} {found.name!r}: {len(found.songs)} songs")
+        self._end_cast()
+        self._query, self._list_name = None, found.name
+        self._queue = [YoutubeTrack("", "", s.title, s.artists, s.duration, found.image, query=s.query)
+                       for s in found.songs]
+        self._played = set()
+        await self._async_play_queue_item(0)
 
     async def async_play_cast(self, video_id: str, position: float = 0, sender: str | None = None) -> ServiceResponse:
         """One track sent by the Home Cast add-on. The phone keeps the queue, so there's no
         autoplay here: the end of the track is reported back with a home_radio_cast event."""
         self._cast_sender = sender or "YouTube"
-        self._query = None
+        self._query, self._list_name = None, None
         self._queue = [YoutubeTrack(video_id, f"https://www.youtube.com/watch?v={video_id}", "", "", 0,
                                     f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg")]
         self._played = set()
@@ -544,7 +599,11 @@ class HomeRadioPlayer(MediaPlayerEntity):
         if media_source.is_media_source_id(media_id):
             play = await media_source.async_resolve_media(self.hass, media_id, self.entity_id)
             media_id = play.url if play.url.startswith("http") else self.hass.config.api.base_url + play.url
-        if media_id.startswith("station:"):
+        if media_id.startswith("queue:") and media_id.removeprefix("queue:").isdigit():
+            await self._async_play_queue_item(int(media_id.removeprefix("queue:")))
+        elif spotify.is_link(media_id):
+            await self.async_play_spotify(media_id)
+        elif media_id.startswith("station:"):
             await self.async_play_station(media_id.removeprefix("station:"))
         elif media_id.startswith("ytq:"):
             await self.async_play_youtube(query=media_id.removeprefix("ytq:"))
@@ -590,10 +649,10 @@ class HomeRadioPlayer(MediaPlayerEntity):
             media_class=MediaClass.DIRECTORY, media_content_id="queue", media_content_type="home_radio",
             title="Ουρά YouTube", can_play=False, can_expand=True, children_media_class=MediaClass.TRACK,
             children=[
-                BrowseMedia(media_class=MediaClass.TRACK, media_content_id=f"yt:{t.url}|{self._query or ''}",
+                BrowseMedia(media_class=MediaClass.TRACK, media_content_id=f"queue:{i}",
                             media_content_type="youtube", title=t.title, can_play=True, can_expand=False,
                             thumbnail=t.thumbnail)
-                for t in self._queue
+                for i, t in enumerate(self._queue)
             ],
         )
         folders = {"stations": stations_dir, "recent": recent_dir, "queue": queue_dir}

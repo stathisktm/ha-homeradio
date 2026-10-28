@@ -161,7 +161,7 @@ class HomeRadioCard extends HTMLElement {
         <div class="tabs">${this._config.tabs.map((t) => `<button data-tab="${t}">${tabNames[t] || t}</button>`).join("")}</div>
         <div class="pane" data-pane="stations"></div>
         <div class="pane" data-pane="youtube">
-          <form class="searchbox"><input placeholder="Αναζήτηση στο YouTube…" enterkeyhint="search"><button>${svg(ICONS.search, 22)}</button></form>
+          <form class="searchbox"><input placeholder="Αναζήτηση στο YouTube ή link Spotify…" enterkeyhint="search"><button>${svg(ICONS.search, 22)}</button></form>
           <div class="recent"></div><div class="list results"><div class="muted">Γράψε καλλιτέχνη, τραγούδι ή είδος.</div></div>
         </div>
         <div class="pane" data-pane="queue"><div class="list queue"></div></div>
@@ -202,7 +202,11 @@ class HomeRadioCard extends HTMLElement {
       if (row) this._call("home_radio.play_youtube", { url: row.dataset.url, ...(row.dataset.q ? { query: row.dataset.q } : {}) });
     };
     $(".results").addEventListener("click", playRow);
-    $(".queue").addEventListener("click", playRow);
+    // A queue row jumps to that place in the queue (Spotify songs have no YouTube link until then).
+    $(".queue").addEventListener("click", (ev) => {
+      const row = ev.target.closest(".row");
+      if (row) this._call("play_media", { media_content_id: `queue:${row.dataset.i}`, media_content_type: "music" });
+    });
     this._tick = setInterval(() => this._updateProgress(), 1000);
   }
 
@@ -211,6 +215,13 @@ class HomeRadioCard extends HTMLElement {
   async _search(q) {
     q = (q || "").trim();
     if (!q) return;
+    if (/open\.spotify\.com\/|spotify:(playlist|album|track):/.test(q)) {
+      // A Spotify link: play it as the queue.
+      this.$(".searchbox input").value = "";
+      this._call("home_radio.play_spotify", { url: q });
+      if (this._config.tabs.includes("queue")) { this._tab = "queue"; this._update(); }
+      return;
+    }
     const list = this.$(".results");
     list.innerHTML = `<div class="spin"></div>`;
     try {
@@ -226,7 +237,7 @@ class HomeRadioCard extends HTMLElement {
   _renderRows(el, items, q, activeIndex) {
     if (!items.length) { el.innerHTML = `<div class="muted">Τίποτα εδώ ακόμα.</div>`; return; }
     el.innerHTML = items.map((t, i) => `
-      <button class="row${i === activeIndex ? " on" : ""}" data-url="${esc(t.url)}" data-q="${esc(q || "")}">
+      <button class="row${i === activeIndex ? " on" : ""}" data-i="${i}" data-url="${esc(t.url)}" data-q="${esc(q || "")}">
         <img loading="lazy" src="${esc(t.thumbnail)}" alt="">
         <div class="t"><div>${esc(t.title)}</div><div>${esc(t.channel)}</div></div>
         <span class="d">${t.duration ? fmt(t.duration) : ""}</span>

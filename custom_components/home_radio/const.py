@@ -27,6 +27,11 @@ SERVICE_PLAY_YOUTUBE = "play_youtube"
 SERVICE_SEARCH_YOUTUBE = "search_youtube"
 SERVICE_REFRESH_STATIONS = "refresh_stations"
 SERVICE_PLAY_CAST = "play_cast"
+SERVICE_PLAY_SPOTIFY = "play_spotify"
+
+# A Spotify song is matched to the first YouTube result this close to its length.
+SPOTIFY_MATCH_RESULTS = 6
+SPOTIFY_MATCH_TOLERANCE_S = 20
 
 # Fired while a phone casts through the Home Cast add-on: the add-on owns the queue, so a track
 # that ends, Next/Previous pressed in Home Assistant, or another source taking over go to it.

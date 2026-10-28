@@ -56,4 +56,15 @@ play_cast:
       example: Pixel 8
       selector:
         text:
+play_spotify:
+  target:
+    entity:
+      integration: home_radio
+      domain: media_player
+  fields:
+    url:
+      required: true
+      example: https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M
+      selector:
+        text:
 refresh_stations:

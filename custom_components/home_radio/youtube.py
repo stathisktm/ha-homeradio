@@ -20,6 +20,9 @@ class YoutubeTrack:
     channel: str
     duration: int
     thumbnail: str
+    # For a song from a Spotify list: what to search YouTube for. video_id/url stay empty until
+    # it's looked up, just before it plays.
+    query: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
