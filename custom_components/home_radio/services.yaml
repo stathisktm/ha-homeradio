@@ -34,4 +34,26 @@ search_youtube:
       example: Βασίλης Παπακωνσταντίνου
       selector:
         text:
+play_cast:
+  target:
+    entity:
+      integration: home_radio
+      domain: media_player
+  fields:
+    video_id:
+      required: true
+      example: dQw4w9WgXcQ
+      selector:
+        text:
+    position:
+      example: 0
+      selector:
+        number:
+          min: 0
+          max: 86400
+          unit_of_measurement: s
+    sender:
+      example: Pixel 8
+      selector:
+        text:
 refresh_stations:

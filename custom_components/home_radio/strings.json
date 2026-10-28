@@ -74,6 +74,24 @@
     "refresh_stations": {
       "name": "Refresh stations",
       "description": "Reads the station list from the TV app now."
+    },
+    "play_cast": {
+      "name": "Play cast track",
+      "description": "Used by the Home Cast add-on: plays one YouTube video sent from a phone's Cast button. The phone keeps the queue.",
+      "fields": {
+        "video_id": {
+          "name": "Video ID",
+          "description": "The YouTube video id."
+        },
+        "position": {
+          "name": "Start position",
+          "description": "Seconds into the track to start from."
+        },
+        "sender": {
+          "name": "Sender",
+          "description": "The phone that cast it."
+        }
+      }
     }
   }
 }

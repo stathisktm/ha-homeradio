@@ -42,9 +42,11 @@ from .const import (
     CONF_TARGET,
     DEFAULT_TARGET,
     DOMAIN,
+    EVENT_CAST,
     KIND_STATION,
     KIND_YOUTUBE,
     RECENT_SEARCHES,
+    SERVICE_PLAY_CAST,
     SERVICE_PLAY_STATION,
     SERVICE_PLAY_YOUTUBE,
     SERVICE_SEARCH_YOUTUBE,
@@ -78,6 +80,9 @@ SUPPORTED = (
 )
 
 SOURCE_YOUTUBE = "YouTube"
+SOURCE_CAST = "YouTube Cast"
+# How long a cast track may take to start before its start position is given up on.
+CAST_SEEK_WAIT_S = 20
 MAX_SKIPS = 4
 # A track that "ends" this soon after starting really failed to play; this many in a row stops
 # autoplay instead of racing through the whole queue.
@@ -105,6 +110,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         {vol.Required("query"): cv.string},
         "async_search_youtube",
         supports_response=SupportsResponse.ONLY,
+    )
+    platform.async_register_entity_service(
+        SERVICE_PLAY_CAST,
+        {
+            vol.Required("video_id"): cv.string,
+            vol.Optional("position", default=0): vol.Coerce(float),
+            vol.Optional("sender"): cv.string,
+        },
+        "async_play_cast",
+        supports_response=SupportsResponse.OPTIONAL,
     )
 
 
@@ -139,6 +154,8 @@ class HomeRadioPlayer(MediaPlayerEntity):
         self._seq = 0
         self._started_at = 0.0
         self._quick_ends = 0
+        # Set while the current track came from a phone casting through the Home Cast add-on.
+        self._cast_sender: str | None = None
 
     # ---- lifecycle -------------------------------------------------------------------------
 
@@ -167,7 +184,11 @@ class HomeRadioPlayer(MediaPlayerEntity):
         ):
             quick = self.hass.loop.time() - self._started_at < QUICK_END_S
             self._quick_ends = self._quick_ends + 1 if quick else 0
-            if self._quick_ends >= MAX_QUICK_ENDS:
+            if self._cast_sender is not None:
+                # The phone's queue decides what comes next.
+                self._stopping = True
+                self._cast_event("stop" if self._quick_ends >= MAX_QUICK_ENDS else "ended")
+            elif self._quick_ends >= MAX_QUICK_ENDS:
                 _LOGGER.warning("home_radio: %d tracks in a row stopped right away on %s — autoplay paused",
                                 self._quick_ends, self._target)
                 self._quick_ends = 0
@@ -265,7 +286,7 @@ class HomeRadioPlayer(MediaPlayerEntity):
         if self._kind == KIND_STATION and self._station:
             return self._station["name"]
         if self._kind == KIND_YOUTUBE:
-            return SOURCE_YOUTUBE
+            return SOURCE_CAST if self._cast_sender is not None else SOURCE_YOUTUBE
         return None
 
     @property
@@ -286,6 +307,7 @@ class HomeRadioPlayer(MediaPlayerEntity):
                 for s in self._stations.stations
             ],
             "target": self._target,
+            "cast_sender": self._cast_sender,
         }
 
     # ---- playing -----------------------------------------------------------------------------
@@ -301,7 +323,19 @@ class HomeRadioPlayer(MediaPlayerEntity):
         self._started_at = self.hass.loop.time()
         await self._send("play_media", {"media_content_id": url, "media_content_type": "music"})
 
+    @callback
+    def _cast_event(self, command: str) -> None:
+        self.hass.bus.async_fire(EVENT_CAST, {ATTR_ENTITY_ID: self.entity_id, "command": command})
+
+    @callback
+    def _end_cast(self) -> None:
+        """Something other than the phone takes over the player."""
+        if self._cast_sender is not None:
+            self._cast_sender = None
+            self._cast_event("stop")
+
     async def _async_start_station(self, station: dict[str, str]) -> None:
+        self._end_cast()
         self._seq += 1
         self._kind, self._station, self._now = KIND_STATION, station, None
         self._queue, self._index = [], -1
@@ -408,9 +442,36 @@ class HomeRadioPlayer(MediaPlayerEntity):
                 start = match
         if not results:
             raise HomeAssistantError(f"Δεν βρέθηκαν αποτελέσματα για: {query}")
+        self._end_cast()
         self._query = query
         self._queue, self._played = list(results), set()
         await self._async_play_queue_item(start)
+
+    async def async_play_cast(self, video_id: str, position: float = 0, sender: str | None = None) -> ServiceResponse:
+        """One track sent by the Home Cast add-on. The phone keeps the queue, so there's no
+        autoplay here: the end of the track is reported back with a home_radio_cast event."""
+        self._cast_sender = sender or "YouTube"
+        self._query = None
+        self._queue = [YoutubeTrack(video_id, f"https://www.youtube.com/watch?v={video_id}", "", "", 0,
+                                    f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg")]
+        self._played = set()
+        await self._async_play_queue_item(0)
+        seq = self._seq
+        ok = self._now is not None and bool(self._now.stream_url)
+        dlog(self.hass, f"CAST {video_id} pos={position} from={sender!r} ok={ok}")
+        if ok and position > 1:
+            self.hass.async_create_task(self._async_seek_when_playing(seq, position))
+        return {"ok": ok, "title": self._now.title if self._now else None}
+
+    async def _async_seek_when_playing(self, seq: int, position: float) -> None:
+        for _ in range(CAST_SEEK_WAIT_S * 2):
+            if seq != self._seq:
+                return
+            tgt = self._tgt
+            if tgt is not None and tgt.state == STATE_PLAYING:
+                await self._send("media_seek", {"seek_position": position})
+                return
+            await asyncio.sleep(0.5)
 
     async def async_search_youtube(self, query: str) -> ServiceResponse:
         results = await self._async_search(query)
@@ -442,6 +503,7 @@ class HomeRadioPlayer(MediaPlayerEntity):
             await self._send("media_pause")
 
     async def async_media_stop(self) -> None:
+        self._end_cast()
         self._stopping = True
         self._seq += 1
         self._loading = False
@@ -455,10 +517,16 @@ class HomeRadioPlayer(MediaPlayerEntity):
         await self.async_media_stop()
 
     async def async_media_next_track(self) -> None:
-        await self._async_advance(1)
+        if self._cast_sender is not None:
+            self._cast_event("next")
+        else:
+            await self._async_advance(1)
 
     async def async_media_previous_track(self) -> None:
-        await self._async_advance(-1)
+        if self._cast_sender is not None:
+            self._cast_event("previous")
+        else:
+            await self._async_advance(-1)
 
     async def async_media_seek(self, position: float) -> None:
         await self._send("media_seek", {"seek_position": position})

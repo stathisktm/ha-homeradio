@@ -311,3 +311,37 @@ async def test_youtube_stream_via_ytdlp_session(hass, calls, hass_client_no_auth
     assert resp.status == 206 and await resp.read() == b"OPUS" * 2000
     assert resp.headers["Content-Range"] == "bytes 0-7999/8000"
     assert seen == {"extra": {"Range": "bytes=0-"}, "closed": True}
+
+
+async def test_cast_track_reports_back_instead_of_autoplay(hass, calls):
+    events = []
+    hass.bus.async_listen("home_radio_cast", lambda e: events.append(e.data["command"]))
+    with patch(f"{MP}.async_resolve", side_effect=_resolved):
+        res = await hass.services.async_call(DOMAIN, "play_cast", {"entity_id": ENTITY, "video_id": "c1",
+                                             "position": 30, "sender": "Pixel"}, blocking=True, return_response=True)
+        assert res[ENTITY]["ok"] is True
+        assert last_url(calls) == "https://audio/c1"
+        await _target(hass, "playing", media_position=0, media_duration=200)
+        assert ("media_seek", 30) in calls.calls  # started where the phone was
+        st = hass.states.get(ENTITY)
+        assert st.attributes["source"] == "YouTube Cast" and st.attributes["cast_sender"] == "Pixel"
+        # Next in HA goes to the phone's queue, not Home Radio's
+        n = len(plays(calls))
+        await hass.services.async_call("media_player", "media_next_track", {"entity_id": ENTITY}, blocking=True)
+        await hass.async_block_till_done()
+        assert events == ["next"] and len(plays(calls)) == n
+        # the track runs out -> reported, nothing auto-played
+        await _target(hass, "idle")
+        assert events == ["next", "ended"] and len(plays(calls)) == n
+        # a station takes over -> the phone is told to stop
+        await hass.services.async_call("media_player", "select_source", {"entity_id": ENTITY, "source": "Fly FM"}, blocking=True)
+        await hass.async_block_till_done()
+        assert events[-1] == "stop"
+        assert hass.states.get(ENTITY).attributes["cast_sender"] is None
+
+
+async def test_cast_unresolvable_says_not_ok(hass, calls):
+    with patch(f"{MP}.async_resolve", return_value=None):
+        res = await hass.services.async_call(DOMAIN, "play_cast", {"entity_id": ENTITY, "video_id": "bad"},
+                                             blocking=True, return_response=True)
+    assert res[ENTITY]["ok"] is False

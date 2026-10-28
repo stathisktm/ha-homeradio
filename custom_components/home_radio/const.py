@@ -26,6 +26,11 @@ SERVICE_PLAY_STATION = "play_station"
 SERVICE_PLAY_YOUTUBE = "play_youtube"
 SERVICE_SEARCH_YOUTUBE = "search_youtube"
 SERVICE_REFRESH_STATIONS = "refresh_stations"
+SERVICE_PLAY_CAST = "play_cast"
+
+# Fired while a phone casts through the Home Cast add-on: the add-on owns the queue, so a track
+# that ends, Next/Previous pressed in Home Assistant, or another source taking over go to it.
+EVENT_CAST = "home_radio_cast"
 
 KIND_STATION = "station"
 KIND_YOUTUBE = "youtube"

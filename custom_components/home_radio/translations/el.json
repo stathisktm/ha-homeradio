@@ -74,6 +74,24 @@
     "refresh_stations": {
       "name": "Ανανέωση σταθμών",
       "description": "Διαβάζει τώρα τη λίστα σταθμών από την εφαρμογή της TV."
+    },
+    "play_cast": {
+      "name": "Αναπαραγωγή από Cast",
+      "description": "Το χρησιμοποιεί το add-on Home Cast: παίζει ένα βίντεο YouTube που στάλθηκε από το κουμπί Cast του κινητού. Την ουρά την κρατά το κινητό.",
+      "fields": {
+        "video_id": {
+          "name": "ID βίντεο",
+          "description": "Το id του βίντεο στο YouTube."
+        },
+        "position": {
+          "name": "Θέση έναρξης",
+          "description": "Δευτερόλεπτα από την αρχή."
+        },
+        "sender": {
+          "name": "Αποστολέας",
+          "description": "Το κινητό που το έστειλε."
+        }
+      }
     }
   }
 }
