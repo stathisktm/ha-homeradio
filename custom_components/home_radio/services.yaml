@@ -67,6 +67,17 @@ play_spotify:
       example: https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M
       selector:
         text:
+get_list:
+  target:
+    entity:
+      integration: home_radio
+      domain: media_player
+  fields:
+    list:
+      required: true
+      example: Today's Top Hits
+      selector:
+        text:
 remove_list:
   target:
     entity:

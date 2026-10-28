@@ -475,7 +475,13 @@ async def _tick(hass, seconds=1):
     await hass.async_block_till_done()
 
 
+def _player(hass):
+    return next(iter(hass.data[DOMAIN].values()))["player"]
+
+
 async def _near_end(hass, position):
+    # the track has been playing a while (right after a start, positions aren't trusted)
+    _player(hass)._started_at = hass.loop.time() - 120
     await _target(hass, "playing", media_duration=200, media_position=position,
                   media_position_updated_at=dt_util.utcnow())
 
@@ -497,6 +503,9 @@ async def test_next_track_is_ready_and_mixed_in(hass, calls):
         assert vols and min(vols) < 0.1 and vols[-1] == 0.5  # down, then back up to where it was
         assert len(plays(calls)) == n_plays + 1 and last_url(calls) == "https://audio/v1"
         assert res.call_count == 2  # the prepared stream was used, not resolved again
+        # the player still shows the old track's position for a moment: no mixing again right away
+        await _tick(hass)
+        assert len(plays(calls)) == n_plays + 1 and res.call_count == 2
         assert hass.states.get(ENTITY).attributes["queue_index"] == 1
 
 
@@ -512,3 +521,29 @@ async def test_without_crossfade_the_prepared_track_still_starts_at_once(hass, c
         assert not [c for c in calls.calls if c[0] == "volume_set"]
         await _target(hass, "idle")  # it ends on its own
         assert last_url(calls) == "https://audio/v1" and res.call_count == 2
+
+
+async def test_saved_list_songs_and_start_from_a_chosen_one(hass, aioclient_mock, calls):
+    aioclient_mock.get("https://open.spotify.com/embed/album/4LH4d3cOWNNsVw41Gqt2kv", text=_fixture("spotify_album.html"))
+
+    async def search(hass_, query, size):
+        vid = "q" + str(abs(hash(query)) % 1000)
+        return [YoutubeTrack(vid, f"https://www.youtube.com/watch?v={vid}", "x", "c", 0, "t")]
+
+    with patch(f"{MP}.async_search", side_effect=search), patch(f"{MP}.async_resolve", side_effect=_resolved):
+        await hass.services.async_call(DOMAIN, "play_spotify", {
+            "entity_id": ENTITY, "url": "https://open.spotify.com/album/4LH4d3cOWNNsVw41Gqt2kv"}, blocking=True)
+        res = await hass.services.async_call(DOMAIN, "get_list", {"entity_id": ENTITY, "list": "album:4LH4d3cOWNNsVw41Gqt2kv"},
+                                             blocking=True, return_response=True)
+        songs = res[ENTITY]["songs"]
+        assert [s["title"] for s in songs][:2] == ["Speak to Me", "Breathe (In the Air)"] and len(songs) == 3
+        await hass.services.async_call("media_player", "play_media", {
+            "entity_id": ENTITY, "media_content_id": "list:album:4LH4d3cOWNNsVw41Gqt2kv@2",
+            "media_content_type": "playlist"}, blocking=True)
+        st = hass.states.get(ENTITY)
+        assert st.attributes["queue_index"] == 2 and st.attributes["media_title"] == songs[2]["title"]
+        await hass.services.async_call("media_player", "play_media", {
+            "entity_id": ENTITY, "media_content_id": "list:album:4LH4d3cOWNNsVw41Gqt2kv@shuffle",
+            "media_content_type": "playlist"}, blocking=True)
+        st = hass.states.get(ENTITY)
+        assert st.attributes["queue_index"] == 0 and len(st.attributes["queue"]) == 3

@@ -6,6 +6,7 @@ player; title, artwork and the queue are this entity's own."""
 from __future__ import annotations
 
 import asyncio
+import random
 from datetime import datetime, timedelta
 import logging
 from typing import Any
@@ -54,6 +55,8 @@ from .const import (
     PREPARE_AHEAD_S,
     PREPARED_MAX_AGE_S,
     RECENT_SEARCHES,
+    SETTLE_S,
+    SERVICE_GET_LIST,
     SERVICE_PLAY_CAST,
     SERVICE_PLAY_SPOTIFY,
     SERVICE_PLAY_STATION,
@@ -140,6 +143,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     )
     platform.async_register_entity_service(
         SERVICE_REMOVE_LIST, {vol.Required("list"): cv.string}, "async_remove_list",
+    )
+    platform.async_register_entity_service(
+        SERVICE_GET_LIST, {vol.Required("list"): cv.string}, "async_get_list",
+        supports_response=SupportsResponse.ONLY,
     )
 
 
@@ -452,6 +459,8 @@ class HomeRadioPlayer(MediaPlayerEntity):
         if (self._kind != KIND_YOUTUBE or self._cast_sender is not None or self._loading
                 or self._mixing or self._stopping):
             return
+        if self.hass.loop.time() - self._started_at < SETTLE_S:
+            return
         remaining = self._remaining_s()
         if remaining is None or (self.media_duration or 0) < YT_MUSIC_MIN_S:
             return
@@ -643,8 +652,9 @@ class HomeRadioPlayer(MediaPlayerEntity):
         self._played = set()
         await self._async_play_queue_item(0)
 
-    async def _async_start_list(self, saved: dict[str, Any]) -> None:
-        """Plays a saved list; songs matched before start without searching."""
+    async def _async_start_list(self, saved: dict[str, Any], start: int = 0, shuffle: bool = False) -> None:
+        """Plays a saved list from song [start] (or shuffled); songs matched before start without
+        searching."""
         self._end_cast()
         self._query, self._list_id, self._list_name = None, saved["id"], saved["name"]
         self._queue = [
@@ -653,15 +663,20 @@ class HomeRadioPlayer(MediaPlayerEntity):
                          query=s.query)
             for s, vid in self._playlists.songs(saved)
         ]
+        if shuffle:
+            random.shuffle(self._queue)
+            start = 0
         self._played = set()
         self._playlists.touch(saved["id"])
-        await self._async_play_queue_item(0)
+        await self._async_play_queue_item(max(0, min(start, len(self._queue) - 1)))
 
     async def async_play_saved(self, key: str) -> None:
+        """`<id>`, `<id>@<song number from 0>` or `<id>@shuffle`."""
+        key, _, how = key.partition("@")
         saved = self._playlists.find(key)
         if saved is None:
             raise HomeAssistantError(f"Δεν βρέθηκε αποθηκευμένη λίστα: {key}")
-        await self._async_start_list(saved)
+        await self._async_start_list(saved, start=int(how) if how.isdigit() else 0, shuffle=how == "shuffle")
         # Meanwhile pick up songs added to it on Spotify since, for next time.
         self.hass.async_create_task(self._async_refresh_saved(saved["id"], saved["url"]))
 
@@ -670,6 +685,22 @@ class HomeRadioPlayer(MediaPlayerEntity):
         if found is not None and found.songs and self._playlists.get(list_id) is not None:
             self._playlists.save(list_id, url, found)
             self._playlists.touch(list_id)
+
+    async def async_get_list(self, list: str) -> ServiceResponse:  # noqa: A002 - the service field's name
+        """A saved list's songs, for picking one in the phone app or a dashboard."""
+        saved = self._playlists.find(list)
+        if saved is None:
+            raise HomeAssistantError(f"Δεν βρέθηκε αποθηκευμένη λίστα: {list}")
+        return {
+            "id": saved["id"],
+            "name": saved["name"],
+            "image": saved.get("image", ""),
+            "songs": [
+                {"title": s.title, "artists": s.artists, "duration": s.duration,
+                 "thumbnail": f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg" if vid else saved.get("image", "")}
+                for s, vid in self._playlists.songs(saved)
+            ],
+        }
 
     async def async_remove_list(self, list: str) -> None:  # noqa: A002 - the service field's name
         saved = self._playlists.find(list)

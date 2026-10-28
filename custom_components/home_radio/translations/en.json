@@ -117,6 +117,16 @@
           "description": "The list's name or id."
         }
       }
+    },
+    "get_list": {
+      "name": "Get saved list",
+      "description": "Returns the songs of a saved list (for picking one to start from: play_media with list:<id>@<number>).",
+      "fields": {
+        "list": {
+          "name": "List",
+          "description": "The list's name or id."
+        }
+      }
     }
   }
 }

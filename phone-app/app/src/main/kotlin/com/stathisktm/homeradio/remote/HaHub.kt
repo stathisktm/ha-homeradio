@@ -63,6 +63,8 @@ object HaHub {
     @Volatile private var connected = false
     // Calls made before the connection is up (a share that opened the app) go out once it is.
     private val waiting = java.util.concurrent.ConcurrentLinkedQueue<String>()
+    // Service calls whose response is awaited (get_list), by message id.
+    private val answers = java.util.concurrent.ConcurrentHashMap<Int, kotlinx.coroutines.CompletableDeferred<JsonObject?>>()
     private var loop: Job? = null
     private var prefs: Prefs? = null
     @Volatile private var generation = 0
@@ -134,8 +136,11 @@ object HaHub {
                     webSocket.close(1000, null)
                 }
                 "event" -> (msg["event"] as? JsonObject)?.let { applyEntityEvent(it, prefs.entityId) }
-                "result" -> if ((msg["success"] as? JsonPrimitive)?.booleanOrNull == false) {
-                    Log.w(TAG, "HA error: $text")
+                "result" -> {
+                    val id = (msg["id"] as? JsonPrimitive)?.contentOrNull?.toIntOrNull()
+                    val ok = (msg["success"] as? JsonPrimitive)?.booleanOrNull != false
+                    id?.let { answers.remove(it)?.complete(if (ok) msg["result"] as? JsonObject else null) }
+                    if (!ok) Log.w(TAG, "HA error: $text")
                 }
             }
         }
@@ -204,6 +209,31 @@ object HaHub {
             })
         }
         if (socket?.send(payload.toString()) != true) Log.w(TAG, "not connected, dropped $domain.$service")
+    }
+
+    /** A service call that returns data (e.g. home_radio.get_list): the entity's part of the
+     *  response, or null if it failed or didn't come within 20 s. */
+    suspend fun callForResponse(domain: String, service: String, data: Map<String, String>): JsonObject? {
+        val entity = prefs?.entityId ?: return null
+        val id = nextId.getAndIncrement()
+        val answer = kotlinx.coroutines.CompletableDeferred<JsonObject?>()
+        answers[id] = answer
+        val payload = buildJsonObject {
+            put("id", id)
+            put("type", "call_service")
+            put("domain", domain)
+            put("service", service)
+            put("return_response", true)
+            put("target", buildJsonObject { put("entity_id", entity) })
+            put("service_data", buildJsonObject { data.forEach { (k, v) -> put(k, v) } })
+        }
+        if (socket?.send(payload.toString()) != true) {
+            answers.remove(id)
+            return null
+        }
+        val result = kotlinx.coroutines.withTimeoutOrNull(20_000) { answer.await() }
+        answers.remove(id)
+        return (result?.get("response") as? JsonObject)?.get(entity) as? JsonObject
     }
 
     /** Like [call], but held until the connection is up if it isn't yet. */

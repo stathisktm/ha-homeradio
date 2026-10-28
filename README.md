@@ -59,7 +59,7 @@ data: { query: "lofi" }
 ---
 action: home_radio.refresh_stations   # ξαναδιαβάζει τους σταθμούς από την TV
 ```
-Επίσης `media_player.select_source` (όνομα σταθμού) και `media_player.play_media` με `station:<id>`, `ytq:<αναζήτηση>`, `queue:<θέση>`, link Spotify, URL YouTube ή οποιοδήποτε URL ροής.
+Επίσης `media_player.select_source` (όνομα σταθμού) και `media_player.play_media` με `station:<id>`, `ytq:<αναζήτηση>`, `queue:<θέση>`, `list:<id>` (ή `list:<id>@<αριθμός>` / `@shuffle`), `home_radio.get_list` για τα τραγούδια μιας λίστας, link Spotify, URL YouTube ή οποιοδήποτε URL ροής.
 
 ## Δοκιμές
 ```bash

@@ -29,6 +29,7 @@ SERVICE_REFRESH_STATIONS = "refresh_stations"
 SERVICE_PLAY_CAST = "play_cast"
 SERVICE_PLAY_SPOTIFY = "play_spotify"
 SERVICE_REMOVE_LIST = "remove_list"
+SERVICE_GET_LIST = "get_list"
 
 # Mixing YouTube tracks: the next one is resolved this long before the current one ends (so it
 # starts at once), then the last DEFAULT_CROSSFADE_S fade out and the new one fades in.
@@ -36,6 +37,8 @@ DEFAULT_CROSSFADE_S = 6
 MAX_CROSSFADE_S = 12
 PREPARE_AHEAD_S = 25
 PREPARED_MAX_AGE_S = 300
+# Right after a track starts the player may still report the last one's position: not trusted.
+SETTLE_S = 15
 # The fade goes down to this share of the volume; the new track comes up from it.
 FADE_FLOOR = 0.15
 FADE_STEP_S = 0.25

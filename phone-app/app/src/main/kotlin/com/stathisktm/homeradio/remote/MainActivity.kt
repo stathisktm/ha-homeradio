@@ -14,7 +14,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.items as rowItems
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Arrangement
@@ -38,6 +40,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -48,6 +51,10 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Card
@@ -96,6 +103,7 @@ import coil.compose.AsyncImage
 import com.google.common.util.concurrent.ListenableFuture
 import java.time.Instant
 import kotlinx.coroutines.delay
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -157,6 +165,7 @@ class MainActivity : ComponentActivity() {
         val s by HaHub.state.collectAsState()
         val status by HaHub.status.collectAsState()
         var showSettings by rememberSaveable { mutableStateOf(!prefs.isConfigured) }
+        var openList by remember { mutableStateOf<JsonObject?>(null) }
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(96.dp),
@@ -173,12 +182,12 @@ class MainActivity : ComponentActivity() {
                 }
                 if (showSettings) item(span = { GridItemSpan(maxLineSpan) }) { Settings(prefs) { showSettings = false } }
                 item(span = { GridItemSpan(maxLineSpan) }) { NowPlaying(s) }
-                val upNext = upNext(s)
-                if (upNext.isNotEmpty()) item(span = { GridItemSpan(maxLineSpan) }) { UpNext(upNext) }
+                val queue = queueOf(s)
+                if (queue.size > 1) item(span = { GridItemSpan(maxLineSpan) }) { QueueCard(queue, s?.num("queue_index")?.toInt() ?: -1) }
                 item(span = { GridItemSpan(maxLineSpan) }) { YoutubeSearch() }
                 s?.let { st ->
                     val lists = st.list("saved_lists").orEmpty().mapNotNull { it as? JsonObject }
-                    item(span = { GridItemSpan(maxLineSpan) }) { SavedLists(lists, st.str("queue_list_id")) }
+                    item(span = { GridItemSpan(maxLineSpan) }) { SavedLists(lists, st.str("queue_list_id")) { openList = it } }
                 }
                 item(span = { GridItemSpan(maxLineSpan) }) { VolumeKeys(prefs) }
                 val stations = s?.list("stations").orEmpty().mapNotNull { it as? JsonObject }
@@ -191,6 +200,7 @@ class MainActivity : ComponentActivity() {
                 item(span = { GridItemSpan(maxLineSpan) }) { Spacer(Modifier.height(24.dp)) }
             }
         }
+        openList?.let { l -> ListSheet(l) { openList = null } }
     }
 
     @Composable
@@ -333,35 +343,97 @@ class MainActivity : ComponentActivity() {
         return if (t >= 3600) "%d:%02d:%02d".format(t / 3600, t / 60 % 60, t % 60) else "%d:%02d".format(t / 60, t % 60)
     }
 
-    /** The next few songs of the queue, with their place in it. */
-    private fun upNext(s: EntityState?): List<Pair<Int, JsonObject>> {
+    /** The YouTube/Spotify queue (not for radio, and not while a phone casts: its queue is the phone's). */
+    private fun queueOf(s: EntityState?): List<JsonObject> {
         if (s == null || s.str("kind") != "youtube" || s.str("cast_sender") != null) return emptyList()
-        val index = s.num("queue_index")?.toInt() ?: return emptyList()
-        return s.list("queue").orEmpty().mapIndexedNotNull { i, e -> (e as? JsonObject)?.let { i to it } }
-            .filter { it.first > index }.take(5)
+        return s.list("queue").orEmpty().mapNotNull { it as? JsonObject }
+    }
+
+    /** The queue: what plays now and what comes next; "Όλη" shows the whole of it. Tap a song to jump. */
+    @Composable
+    private fun QueueCard(queue: List<JsonObject>, current: Int) {
+        var all by rememberSaveable { mutableStateOf(false) }
+        val shown = if (all) queue.indices.toList() else (current.coerceAtLeast(0) until (current.coerceAtLeast(0) + 5).coerceAtMost(queue.size)).toList()
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+            Column(Modifier.padding(vertical = 8.dp)) {
+                Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Ουρά · ${current + 1}/${queue.size}", fontWeight = FontWeight.Bold, color = Color.Gray, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { all = !all }) { Text(if (all) "Λιγότερα" else "Όλη η ουρά") }
+                }
+                shown.forEach { i -> SongRow(queue[i], number = i + 1, active = i == current) {
+                    HaHub.mediaPlayer("play_media", mapOf("media_content_id" to "queue:$i", "media_content_type" to "music"))
+                } }
+            }
+        }
     }
 
     @Composable
-    private fun UpNext(items: List<Pair<Int, JsonObject>>) {
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-            Column(Modifier.padding(vertical = 10.dp)) {
-                Text("Επόμενα", fontWeight = FontWeight.Bold, color = Color.Gray, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-                items.forEach { (i, t) ->
-                    Row(
-                        Modifier.fillMaxWidth().clickable {
-                            HaHub.mediaPlayer("play_media", mapOf("media_content_id" to "queue:$i", "media_content_type" to "music"))
-                        }.padding(horizontal = 16.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(Modifier.size(width = 64.dp, height = 40.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFF2A3140))) {
-                            val thumb = t.text("thumbnail")
-                            if (!thumb.isNullOrBlank()) AsyncImage(thumb, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                        }
-                        Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                            Text(t.text("title").orEmpty(), fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(t.text("channel").orEmpty(), fontSize = 12.sp, color = Color.Gray, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                    }
+    private fun SongRow(t: JsonObject, number: Int, active: Boolean, onClick: () -> Unit) {
+        Row(
+            Modifier.fillMaxWidth().background(if (active) Accent.copy(alpha = 0.14f) else Color.Transparent)
+                .clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(if (active) "▶" else "$number", fontSize = 12.sp, color = if (active) Accent else Color.Gray,
+                textAlign = TextAlign.Center, modifier = Modifier.width(28.dp))
+            Box(Modifier.size(width = 56.dp, height = 36.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFF2A3140))) {
+                val thumb = t.text("thumbnail")
+                if (!thumb.isNullOrBlank()) AsyncImage(thumb, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            }
+            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                Text(t.text("title").orEmpty(), fontSize = 14.sp, fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                    color = if (active) Accent else Color.Unspecified, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text((t.text("channel") ?: t.text("artists")).orEmpty(), fontSize = 12.sp, color = Color.Gray, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            t.text("duration")?.toDoubleOrNull()?.takeIf { it > 0 }?.let {
+                Text(clock(it), fontSize = 12.sp, color = Color.Gray, modifier = Modifier.padding(start = 8.dp))
+            }
+        }
+    }
+
+    /** A saved list opened: all its songs, play from any of them, everything, or shuffled. */
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    private fun ListSheet(list: JsonObject, onClose: () -> Unit) {
+        val id = list.text("id") ?: return onClose()
+        var songs by remember(id) { mutableStateOf<List<JsonObject>?>(null) }
+        var failed by remember(id) { mutableStateOf(false) }
+        LaunchedEffect(id) {
+            val res = HaHub.callForResponse("home_radio", "get_list", mapOf("list" to id))
+            songs = (res?.get("songs") as? JsonArray)?.mapNotNull { it as? JsonObject }
+            failed = songs == null
+        }
+        val play = { how: String ->
+            HaHub.mediaPlayer("play_media", mapOf("media_content_id" to "list:$id$how", "media_content_type" to "playlist"))
+            onClose()
+        }
+        ModalBottomSheet(onDismissRequest = onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = MaterialTheme.colorScheme.surface) {
+            Row(Modifier.padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(72.dp).clip(RoundedCornerShape(14.dp)).background(Color(0xFF2A3140)), contentAlignment = Alignment.Center) {
+                    val img = list.text("image")
+                    if (!img.isNullOrBlank()) AsyncImage(img, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    else Text("♫", fontSize = 30.sp, color = Color.White)
+                }
+                Column(Modifier.padding(start = 14.dp)) {
+                    Text(list.text("name").orEmpty(), fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text("${list.text("count").orEmpty()} τραγούδια", fontSize = 13.sp, color = Color.Gray)
+                }
+            }
+            Row(Modifier.padding(horizontal = 20.dp, vertical = 14.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(onClick = { play("") }, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(6.dp)); Text("Παίξε όλα")
+                }
+                OutlinedButton(onClick = { play("@shuffle") }, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Default.Shuffle, null); Spacer(Modifier.width(6.dp)); Text("Ανακάτεμα")
+                }
+            }
+            when {
+                failed -> Text("Δεν φορτώθηκαν τα τραγούδια.", color = Color.Gray, modifier = Modifier.padding(20.dp))
+                songs == null -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                else -> LazyColumn(Modifier.fillMaxWidth().height(460.dp)) {
+                    itemsIndexed(songs.orEmpty()) { i, t -> SongRow(t, number = i + 1, active = false) { play("@$i") } }
+                    item { Spacer(Modifier.height(24.dp)) }
                 }
             }
         }
@@ -428,7 +500,7 @@ class MainActivity : ComponentActivity() {
     /** Spotify playlists/albums played before, kept by Home Radio: tap plays, long press removes. */
     @OptIn(ExperimentalFoundationApi::class)
     @Composable
-    private fun SavedLists(lists: List<JsonObject>, playingId: String?) {
+    private fun SavedLists(lists: List<JsonObject>, playingId: String?, onOpen: (JsonObject) -> Unit) {
         var removing by remember { mutableStateOf<JsonObject?>(null) }
         Column {
             Text("Λίστες", fontWeight = FontWeight.Bold, color = Color.Gray, modifier = Modifier.padding(top = 8.dp, bottom = 8.dp))
@@ -447,9 +519,7 @@ class MainActivity : ComponentActivity() {
                     val id = l.text("id") ?: return@rowItems
                     val active = id == playingId
                     Column(Modifier.width(112.dp).combinedClickable(
-                        onClick = {
-                            HaHub.mediaPlayer("play_media", mapOf("media_content_id" to "list:$id", "media_content_type" to "playlist"))
-                        },
+                        onClick = { onOpen(l) },
                         onLongClick = { removing = l },
                     )) {
                         Box(
@@ -474,7 +544,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            Text("Πρόσθεσε λίστα: στο Spotify → Κοινοποίηση → Home Radio. Κράτα πατημένη μια λίστα για αφαίρεση.",
+            Text("Πάτα μια λίστα για τα τραγούδια της. Νέα λίστα: Spotify → Κοινοποίηση → Home Radio. Κράτα πατημένη για αφαίρεση.",
                 fontSize = 11.sp, color = Color.Gray, modifier = Modifier.padding(top = 6.dp))
         }
         removing?.let { l ->
