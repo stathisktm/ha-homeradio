@@ -18,7 +18,7 @@ from .playlists import PlaylistStore
 from .stations import StationStore
 from .stream_view import YoutubeStreamView
 
-PLATFORMS: list[Platform] = [Platform.MEDIA_PLAYER, Platform.TEXT]
+PLATFORMS: list[Platform] = [Platform.MEDIA_PLAYER, Platform.NUMBER, Platform.TEXT]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 

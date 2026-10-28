@@ -34,6 +34,11 @@
       "youtube_search": {
         "name": "YouTube"
       }
+    },
+    "number": {
+      "crossfade": {
+        "name": "Μίξη τραγουδιών"
+      }
     }
   },
   "services": {

@@ -460,3 +460,55 @@ async def test_spotify_list_is_saved_and_replays_without_searching(hass, hass_st
         await hass.services.async_call(DOMAIN, "remove_list", {"entity_id": ENTITY, "list": "the dark side of the moon"},
                                        blocking=True)
         assert hass.states.get(ENTITY).attributes["saved_lists"] == []
+
+
+# ---- mixing into the next track --------------------------------------------------------------
+
+from datetime import timedelta
+
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import async_fire_time_changed
+
+
+async def _tick(hass, seconds=1):
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=seconds))
+    await hass.async_block_till_done()
+
+
+async def _near_end(hass, position):
+    await _target(hass, "playing", media_duration=200, media_position=position,
+                  media_position_updated_at=dt_util.utcnow())
+
+
+async def test_next_track_is_ready_and_mixed_in(hass, calls):
+    resolve = patch(f"{MP}.async_resolve", side_effect=_resolved)
+    with patch(f"{MP}.async_search", return_value=_tracks()), resolve as res, patch(f"{MP}.FADE_STEP_S", 0.001), \
+         patch(f"{MP}.FADE_IN_S", 0.01):
+        await hass.services.async_call(DOMAIN, "play_youtube", {"entity_id": ENTITY, "query": "rock"}, blocking=True)
+        assert hass.states.get("number.home_radio_crossfade").state == "6"
+        await _near_end(hass, 180)  # 20 s left: the next one gets resolved now
+        await _tick(hass)
+        assert res.call_count == 2
+        n_plays = len(plays(calls))
+        await _near_end(hass, 195)  # 5 s left, crossfade is 6: mix
+        await _tick(hass)
+        await hass.async_block_till_done()
+        vols = [v for c, v in calls.calls if c == "volume_set"]
+        assert vols and min(vols) < 0.1 and vols[-1] == 0.5  # down, then back up to where it was
+        assert len(plays(calls)) == n_plays + 1 and last_url(calls) == "https://audio/v1"
+        assert res.call_count == 2  # the prepared stream was used, not resolved again
+        assert hass.states.get(ENTITY).attributes["queue_index"] == 1
+
+
+async def test_without_crossfade_the_prepared_track_still_starts_at_once(hass, calls):
+    with patch(f"{MP}.async_search", return_value=_tracks()), patch(f"{MP}.async_resolve", side_effect=_resolved) as res:
+        await hass.services.async_call("number", "set_value", {"entity_id": "number.home_radio_crossfade", "value": 0},
+                                       blocking=True)
+        await hass.services.async_call(DOMAIN, "play_youtube", {"entity_id": ENTITY, "query": "rock"}, blocking=True)
+        await _near_end(hass, 190)
+        await _tick(hass)
+        await _near_end(hass, 199)
+        await _tick(hass)
+        assert not [c for c in calls.calls if c[0] == "volume_set"]
+        await _target(hass, "idle")  # it ends on its own
+        assert last_url(calls) == "https://audio/v1" and res.call_count == 2

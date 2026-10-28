@@ -104,7 +104,8 @@ class RemotePlayer(looper: Looper) : SimpleBasePlayer(looper) {
             val updated = s.str("media_position_updated_at")?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() }
             ms += System.currentTimeMillis() - (updated ?: s.receivedAtMs)
         }
-        val dur = s.num("media_duration")?.let { (it * 1000).toLong() }
+        // VLC reports -1 while it doesn't know the length yet (and for live streams).
+        val dur = s.num("media_duration")?.takeIf { it > 0 }?.let { (it * 1000).toLong() }
         return if (dur != null) ms.coerceIn(0, dur) else ms.coerceAtLeast(0)
     }
 

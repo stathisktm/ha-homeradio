@@ -6,7 +6,7 @@ player; title, artwork and the queue are this entity's own."""
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 from typing import Any
 
@@ -36,15 +36,23 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv, entity_platform
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_TARGET,
+    DEFAULT_CROSSFADE_S,
     DEFAULT_TARGET,
     DOMAIN,
     EVENT_CAST,
+    FADE_FLOOR,
+    FADE_IN_S,
+    FADE_STEPS,
+    FADE_STEP_S,
     KIND_STATION,
     KIND_YOUTUBE,
+    PREPARE_AHEAD_S,
+    PREPARED_MAX_AGE_S,
     RECENT_SEARCHES,
     SERVICE_PLAY_CAST,
     SERVICE_PLAY_SPOTIFY,
@@ -172,6 +180,11 @@ class HomeRadioPlayer(MediaPlayerEntity):
         # The Spotify playlist/album the queue came from (a saved list's id, and its name).
         self._list_id: str | None = None
         self._list_name: str | None = None
+        # Mixing into the next track (set by the crossfade number entity).
+        self.crossfade_s: float = DEFAULT_CROSSFADE_S
+        self._prepared: tuple[int, str, ResolvedAudio, float] | None = None  # index, video, audio, when
+        self._preparing = False
+        self._mixing = False
 
     # ---- lifecycle -------------------------------------------------------------------------
 
@@ -181,6 +194,7 @@ class HomeRadioPlayer(MediaPlayerEntity):
         )
         self.async_on_remove(self._stations.add_listener(self.async_write_ha_state))
         self.async_on_remove(self._playlists.add_listener(self.async_write_ha_state))
+        self.async_on_remove(async_track_time_interval(self.hass, self._tick, timedelta(seconds=1)))
 
     @callback
     def _on_target_change(self, event: Event[EventStateChangedData]) -> None:
@@ -194,6 +208,7 @@ class HomeRadioPlayer(MediaPlayerEntity):
             self._kind == KIND_YOUTUBE
             and not self._loading
             and not self._stopping
+            and not self._mixing
             and old is not None
             and new is not None
             and old.state == STATE_PLAYING
@@ -287,12 +302,17 @@ class HomeRadioPlayer(MediaPlayerEntity):
     @property
     def media_duration(self) -> int | None:
         if self._kind == KIND_YOUTUBE:
-            return self._tattr("media_duration") or (self._now.duration if self._now else None)
+            # VLC says -1 until it knows the length: fall back to what YouTube/Spotify said.
+            vlc = self._tattr("media_duration")
+            if isinstance(vlc, (int, float)) and vlc > 0:
+                return vlc
+            return (self._now.duration or None) if self._now else None
         return None
 
     @property
     def media_position(self) -> int | None:
-        return self._tattr("media_position") if self._kind == KIND_YOUTUBE else None
+        pos = self._tattr("media_position") if self._kind == KIND_YOUTUBE else None
+        return pos if isinstance(pos, (int, float)) and pos >= 0 else None
 
     @property
     def media_position_updated_at(self) -> datetime | None:
@@ -372,8 +392,13 @@ class HomeRadioPlayer(MediaPlayerEntity):
         self._kind, self._index, self._loading = KIND_YOUTUBE, index, True
         self._now = ResolvedAudio("", track.title, track.channel, track.duration, track.thumbnail)
         self.async_write_ha_state()
-        found = await self._async_match(track)
-        resolved = await async_resolve(self.hass, track.url) if found and seq == self._seq else None
+        prepared, self._prepared = self._prepared, None
+        if (prepared is not None and prepared[0] == index and prepared[1] == track.video_id
+                and self.hass.loop.time() - prepared[3] < PREPARED_MAX_AGE_S):
+            resolved = prepared[2]  # made ready while the previous track played
+        else:
+            found = await self._async_match(track)
+            resolved = await async_resolve(self.hass, track.url) if found and seq == self._seq else None
         if seq != self._seq:
             return  # something else was asked for meanwhile
         if resolved is None:
@@ -400,6 +425,97 @@ class HomeRadioPlayer(MediaPlayerEntity):
         finally:
             self._loading = False
             self.async_write_ha_state()
+
+    # ---- mixing into the next track ---------------------------------------------------------
+
+    def _next_index(self) -> int | None:
+        """What autoplay will play next, if it's already in the queue."""
+        nxt = self._index + 1
+        while 0 <= nxt < len(self._queue) and not self._queue[nxt].query \
+                and not (YT_MUSIC_MIN_S <= self._queue[nxt].duration <= YT_MUSIC_MAX_S):
+            nxt += 1
+        return nxt if nxt < len(self._queue) else None
+
+    def _remaining_s(self) -> float | None:
+        tgt = self._tgt
+        duration = self.media_duration
+        pos = tgt.attributes.get("media_position") if tgt else None
+        if tgt is None or tgt.state != STATE_PLAYING or not duration or not isinstance(pos, (int, float)) or pos < 0:
+            return None
+        at = tgt.attributes.get("media_position_updated_at")
+        if isinstance(at, datetime):
+            pos += (dt_util.utcnow() - at).total_seconds()
+        return duration - pos
+
+    @callback
+    def _tick(self, _now: datetime) -> None:
+        if (self._kind != KIND_YOUTUBE or self._cast_sender is not None or self._loading
+                or self._mixing or self._stopping):
+            return
+        remaining = self._remaining_s()
+        if remaining is None or (self.media_duration or 0) < YT_MUSIC_MIN_S:
+            return
+        nxt = self._next_index()
+        if nxt is None:
+            return
+        ready = self._prepared is not None and self._prepared[0] == nxt
+        if remaining <= PREPARE_AHEAD_S and not ready and not self._preparing:
+            self.hass.async_create_task(self._async_prepare(nxt))
+        elif ready and self.crossfade_s > 0 and remaining <= self.crossfade_s:
+            self._mixing = True
+            self.hass.async_create_task(self._async_mix(remaining))
+
+    async def _async_prepare(self, index: int) -> None:
+        self._preparing = True
+        seq = self._seq
+        try:
+            track = self._queue[index]
+            if not await self._async_match(track):
+                return
+            resolved = await async_resolve(self.hass, track.url)
+            if resolved is not None and seq == self._seq:
+                self._prepared = (index, track.video_id, resolved, self.hass.loop.time())
+                dlog(self.hass, f"PREPARED {track.url}")
+        finally:
+            self._preparing = False
+
+    async def _async_volume(self, level: float) -> None:
+        await self._send("volume_set", {ATTR_MEDIA_VOLUME_LEVEL: round(max(0.0, min(1.0, level)), 3)})
+
+    async def _async_mix(self, remaining: float) -> None:
+        """Fades the ending track out, starts the prepared one, fades it in."""
+        seq = self._seq
+        start = self.volume_level
+        if not isinstance(start, (int, float)) or start <= 0:
+            self._mixing = False
+            return
+        floor = start * FADE_FLOOR
+        try:
+            interval = max(0.05, remaining - 0.3) / FADE_STEPS
+            for i in range(1, FADE_STEPS + 1):
+                if seq != self._seq:
+                    return  # something else was picked: the finally puts the volume back
+                await self._async_volume(start - (start - floor) * i / FADE_STEPS)
+                await asyncio.sleep(interval)
+            if seq != self._seq:
+                return
+            await self._async_advance(1, autoplay=True)
+            seq = self._seq
+            for _ in range(20):  # wait for it to actually play
+                tgt = self._tgt
+                if seq != self._seq or (tgt is not None and tgt.state == STATE_PLAYING):
+                    break
+                await asyncio.sleep(FADE_STEP_S)
+            steps = FADE_STEPS // 2
+            for i in range(1, steps + 1):
+                if seq != self._seq:
+                    return
+                await self._async_volume(floor + (start - floor) * i / steps)
+                await asyncio.sleep(FADE_IN_S / steps)
+        finally:
+            self._mixing = False
+            if self.volume_level != start:
+                await self._async_volume(start)
 
     async def _async_match(self, track: YoutubeTrack) -> bool:
         """Finds a Spotify song on YouTube: the first result about as long as the song."""

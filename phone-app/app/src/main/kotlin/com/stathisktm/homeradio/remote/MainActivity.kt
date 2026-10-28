@@ -37,6 +37,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -47,6 +48,8 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledIconButton
@@ -62,7 +65,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -89,6 +94,8 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import coil.compose.AsyncImage
 import com.google.common.util.concurrent.ListenableFuture
+import java.time.Instant
+import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -166,12 +173,14 @@ class MainActivity : ComponentActivity() {
                 }
                 if (showSettings) item(span = { GridItemSpan(maxLineSpan) }) { Settings(prefs) { showSettings = false } }
                 item(span = { GridItemSpan(maxLineSpan) }) { NowPlaying(s) }
-                item(span = { GridItemSpan(maxLineSpan) }) { VolumeKeys(prefs) }
+                val upNext = upNext(s)
+                if (upNext.isNotEmpty()) item(span = { GridItemSpan(maxLineSpan) }) { UpNext(upNext) }
                 item(span = { GridItemSpan(maxLineSpan) }) { YoutubeSearch() }
-                val lists = s?.list("saved_lists").orEmpty().mapNotNull { it as? JsonObject }
-                if (lists.isNotEmpty()) {
-                    item(span = { GridItemSpan(maxLineSpan) }) { SavedLists(lists, s?.str("queue_list_id")) }
+                s?.let { st ->
+                    val lists = st.list("saved_lists").orEmpty().mapNotNull { it as? JsonObject }
+                    item(span = { GridItemSpan(maxLineSpan) }) { SavedLists(lists, st.str("queue_list_id")) }
                 }
+                item(span = { GridItemSpan(maxLineSpan) }) { VolumeKeys(prefs) }
                 val stations = s?.list("stations").orEmpty().mapNotNull { it as? JsonObject }
                 if (stations.isNotEmpty()) {
                     item(span = { GridItemSpan(maxLineSpan) }) {
@@ -214,6 +223,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun NowPlaying(s: EntityState?) {
         val playing = s?.state == "playing"
+        val loading = s?.state == "buffering"
         val pic = HaHub.pictureUrl(s)
         Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(Color(0xFF1B2230))) {
             if (pic != null) {
@@ -227,12 +237,25 @@ class MainActivity : ComponentActivity() {
                     } else {
                         Text("📻", fontSize = 64.sp)
                     }
+                    if (loading) {
+                        Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.45f)), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(color = Color.White, strokeWidth = 4.dp)
+                        }
+                    }
                 }
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(14.dp))
+                sourceLabel(s)?.let { label ->
+                    Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Color.White, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.clip(RoundedCornerShape(99.dp)).background(Color.White.copy(alpha = 0.16f))
+                            .padding(horizontal = 12.dp, vertical = 4.dp))
+                    Spacer(Modifier.height(10.dp))
+                }
                 Text(s?.str("media_title") ?: "Διάλεξε σταθμό ή τραγούδι", fontSize = 20.sp, fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(s?.str("media_artist") ?: s?.str("source").orEmpty(), color = Color(0xFFCFD8DC), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(16.dp))
+                Progress(s, playing)
+                Spacer(Modifier.height(12.dp))
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     RoundButton({ HaHub.mediaPlayer("media_previous_track") }) { Icon(Icons.Default.SkipPrevious, "Προηγούμενο") }
                     RoundButton({ HaHub.mediaPlayer("media_stop") }) { Icon(Icons.Default.Stop, "Στοπ") }
@@ -260,6 +283,90 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Where the music comes from, shown above the title. */
+    private fun sourceLabel(s: EntityState?): String? {
+        if (s == null) return null
+        return when {
+            s.str("cast_sender") != null -> "📱 Cast από ${s.str("cast_sender")}"
+            s.str("queue_name") != null -> "♫ ${s.str("queue_name")}"
+            s.str("kind") == "station" -> "📻 Ραδιόφωνο"
+            s.str("kind") == "youtube" -> "▶ YouTube"
+            else -> null
+        }
+    }
+
+    /** Position bar with times, for tracks with a known length; drag to seek. */
+    @Composable
+    private fun Progress(s: EntityState?, playing: Boolean) {
+        val duration = s?.num("media_duration")?.takeIf { it > 0 } ?: return
+        var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+        LaunchedEffect(playing) {
+            while (playing) {
+                delay(1_000)
+                now = System.currentTimeMillis()
+            }
+        }
+        val reported = s.num("media_position") ?: 0.0
+        val since = s.str("media_position_updated_at")?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() } ?: s.receivedAtMs
+        val position = (reported + if (playing) (now - since) / 1000.0 else 0.0).coerceIn(0.0, duration)
+        var dragging by remember { mutableStateOf<Float?>(null) }
+        Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
+            Slider(
+                value = dragging ?: (position / duration).toFloat(),
+                onValueChange = { dragging = it },
+                onValueChangeFinished = {
+                    dragging?.let { HaHub.mediaPlayer("media_seek", mapOf("seek_position" to it * duration)) }
+                    dragging = null
+                },
+                colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White,
+                    inactiveTrackColor = Color.White.copy(alpha = 0.25f)),
+            )
+            Row(Modifier.fillMaxWidth()) {
+                Text(clock(dragging?.let { it * duration } ?: position), fontSize = 12.sp, color = Color(0xFFCFD8DC), modifier = Modifier.weight(1f))
+                Text(clock(duration), fontSize = 12.sp, color = Color(0xFFCFD8DC))
+            }
+        }
+    }
+
+    private fun clock(seconds: Double): String {
+        val t = seconds.toInt().coerceAtLeast(0)
+        return if (t >= 3600) "%d:%02d:%02d".format(t / 3600, t / 60 % 60, t % 60) else "%d:%02d".format(t / 60, t % 60)
+    }
+
+    /** The next few songs of the queue, with their place in it. */
+    private fun upNext(s: EntityState?): List<Pair<Int, JsonObject>> {
+        if (s == null || s.str("kind") != "youtube" || s.str("cast_sender") != null) return emptyList()
+        val index = s.num("queue_index")?.toInt() ?: return emptyList()
+        return s.list("queue").orEmpty().mapIndexedNotNull { i, e -> (e as? JsonObject)?.let { i to it } }
+            .filter { it.first > index }.take(5)
+    }
+
+    @Composable
+    private fun UpNext(items: List<Pair<Int, JsonObject>>) {
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+            Column(Modifier.padding(vertical = 10.dp)) {
+                Text("Επόμενα", fontWeight = FontWeight.Bold, color = Color.Gray, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                items.forEach { (i, t) ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable {
+                            HaHub.mediaPlayer("play_media", mapOf("media_content_id" to "queue:$i", "media_content_type" to "music"))
+                        }.padding(horizontal = 16.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(Modifier.size(width = 64.dp, height = 40.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFF2A3140))) {
+                            val thumb = t.text("thumbnail")
+                            if (!thumb.isNullOrBlank()) AsyncImage(thumb, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                        }
+                        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                            Text(t.text("title").orEmpty(), fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(t.text("channel").orEmpty(), fontSize = 12.sp, color = Color.Gray, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     @Composable
     private fun RoundButton(onClick: () -> Unit, content: @Composable () -> Unit) {
         FilledIconButton(onClick = onClick, modifier = Modifier.size(48.dp),
@@ -272,11 +379,13 @@ class MainActivity : ComponentActivity() {
     private fun VolumeKeys(prefs: Prefs) {
         var enabled by remember { mutableStateOf(VolumeKeyService.isEnabled(this)) }
         var wanted by remember { mutableStateOf(prefs.volumeKeys) }
+        var hidden by remember { mutableStateOf(prefs.volumeKeysHintHidden) }
         // Re-check when coming back from the system's accessibility settings.
         LifecycleResumeEffect(Unit) {
             enabled = VolumeKeyService.isEnabled(this@MainActivity)
             onPauseOrDispose { }
         }
+        if (!enabled && hidden) return
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
             Column(Modifier.padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -288,7 +397,11 @@ class MainActivity : ComponentActivity() {
                             fontSize = 12.sp, color = Color.Gray,
                         )
                     }
-                    if (enabled) Switch(checked = wanted, onCheckedChange = { wanted = it; prefs.volumeKeys = it })
+                    if (enabled) {
+                        Switch(checked = wanted, onCheckedChange = { wanted = it; prefs.volumeKeys = it })
+                    } else {
+                        IconButton(onClick = { hidden = true; prefs.volumeKeysHintHidden = true }) { Icon(Icons.Default.Close, "Κλείσιμο") }
+                    }
                 }
                 if (!enabled) {
                     TextButton(onClick = {
@@ -319,6 +432,16 @@ class MainActivity : ComponentActivity() {
         var removing by remember { mutableStateOf<JsonObject?>(null) }
         Column {
             Text("Λίστες", fontWeight = FontWeight.Bold, color = Color.Gray, modifier = Modifier.padding(top = 8.dp, bottom = 8.dp))
+            if (lists.isEmpty()) {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("🎶", fontSize = 32.sp)
+                        Text("Στο Spotify άνοιξε μια λίστα ή άλμπουμ → Κοινοποίηση → «Παίξε στο Home Radio». Παίζει εδώ και κρατιέται για την επόμενη φορά.",
+                            fontSize = 13.sp, color = Color(0xFFCFD8DC), modifier = Modifier.padding(start = 12.dp))
+                    }
+                }
+                return@Column
+            }
             LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 rowItems(lists, key = { it.text("id").orEmpty() }) { l ->
                     val id = l.text("id") ?: return@rowItems

@@ -30,6 +30,19 @@ SERVICE_PLAY_CAST = "play_cast"
 SERVICE_PLAY_SPOTIFY = "play_spotify"
 SERVICE_REMOVE_LIST = "remove_list"
 
+# Mixing YouTube tracks: the next one is resolved this long before the current one ends (so it
+# starts at once), then the last DEFAULT_CROSSFADE_S fade out and the new one fades in.
+DEFAULT_CROSSFADE_S = 6
+MAX_CROSSFADE_S = 12
+PREPARE_AHEAD_S = 25
+PREPARED_MAX_AGE_S = 300
+# The fade goes down to this share of the volume; the new track comes up from it.
+FADE_FLOOR = 0.15
+FADE_STEP_S = 0.25
+# Volume changes per fade, however long it is (each is one command to VLC).
+FADE_STEPS = 16
+FADE_IN_S = 2.5
+
 # A Spotify song is matched to the first YouTube result this close to its length.
 SPOTIFY_MATCH_RESULTS = 6
 SPOTIFY_MATCH_TOLERANCE_S = 20
