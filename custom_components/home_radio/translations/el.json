@@ -102,6 +102,16 @@
           "description": "open.spotify.com/playlist/…, /album/… ή /track/…"
         }
       }
+    },
+    "remove_list": {
+      "name": "Αφαίρεση αποθηκευμένης λίστας",
+      "description": "Αφαιρεί μια αποθηκευμένη λίστα Spotify από τις Λίστες του Home Radio.",
+      "fields": {
+        "list": {
+          "name": "Λίστα",
+          "description": "Το όνομα ή το id της λίστας."
+        }
+      }
     }
   }
 }

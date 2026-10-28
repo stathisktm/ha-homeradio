@@ -2,4 +2,5 @@
     <string name="app_name">Home Radio</string>
     <string name="volume_keys_label">Home Radio: πλήκτρα έντασης</string>
     <string name="volume_keys_description">Όσο παίζει το Home Radio, τα πλήκτρα έντασης του κινητού αλλάζουν την ένταση των ηχείων του Home Assistant (και στην οθόνη κλειδώματος). Όταν το κινητό παίζει δικό του ήχο ή είσαι σε κλήση, δουλεύουν κανονικά. Η υπηρεσία βλέπει μόνο τα πλήκτρα έντασης.</string>
+    <string name="share_label">Παίξε στο Home Radio</string>
 </resources>

@@ -60,6 +60,9 @@ object HaHub {
     private val nextId = AtomicInteger(1)
 
     private var socket: WebSocket? = null
+    @Volatile private var connected = false
+    // Calls made before the connection is up (a share that opened the app) go out once it is.
+    private val waiting = java.util.concurrent.ConcurrentLinkedQueue<String>()
     private var loop: Job? = null
     private var prefs: Prefs? = null
     @Volatile private var generation = 0
@@ -118,6 +121,8 @@ object HaHub {
                 }.toString())
                 "auth_ok" -> {
                     _status.value = "Συνδέθηκε"
+                    connected = true
+                    while (true) webSocket.send(waiting.poll() ?: break)
                     webSocket.send(buildJsonObject {
                         put("id", nextId.getAndIncrement())
                         put("type", "subscribe_entities")
@@ -137,11 +142,13 @@ object HaHub {
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
             Log.w(TAG, "connection failed", t)
+            if (gen == generation) connected = false
             if (gen == generation) _status.value = "Χωρίς σύνδεση με το HA"
             closed.complete(Unit)
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+            if (gen == generation) connected = false
             if (gen == generation && _status.value == "Συνδέθηκε") _status.value = "Αποσύνδεση"
             closed.complete(Unit)
         }
@@ -197,6 +204,20 @@ object HaHub {
             })
         }
         if (socket?.send(payload.toString()) != true) Log.w(TAG, "not connected, dropped $domain.$service")
+    }
+
+    /** Like [call], but held until the connection is up if it isn't yet. */
+    fun callSoon(domain: String, service: String, data: Map<String, Any> = emptyMap()) {
+        if (connected) return call(domain, service, data)
+        val entity = prefs?.entityId ?: return
+        waiting.add(buildJsonObject {
+            put("id", nextId.getAndIncrement())
+            put("type", "call_service")
+            put("domain", domain)
+            put("service", service)
+            put("target", buildJsonObject { put("entity_id", entity) })
+            put("service_data", buildJsonObject { data.forEach { (k, v) -> put(k, v.toString()) } })
+        }.toString())
     }
 
     fun mediaPlayer(service: String, data: Map<String, Any> = emptyMap()) = call("media_player", service, data)

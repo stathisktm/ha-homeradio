@@ -102,6 +102,16 @@
           "description": "open.spotify.com/playlist/…, /album/… or /track/…"
         }
       }
+    },
+    "remove_list": {
+      "name": "Remove saved list",
+      "description": "Removes a saved Spotify list from Home Radio's Lists.",
+      "fields": {
+        "list": {
+          "name": "List",
+          "description": "The list's name or id."
+        }
+      }
     }
   }
 }

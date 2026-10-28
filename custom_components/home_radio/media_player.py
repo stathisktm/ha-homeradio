@@ -49,6 +49,7 @@ from .const import (
     SERVICE_PLAY_CAST,
     SERVICE_PLAY_SPOTIFY,
     SERVICE_PLAY_STATION,
+    SERVICE_REMOVE_LIST,
     SERVICE_PLAY_YOUTUBE,
     SERVICE_SEARCH_YOUTUBE,
     SPOTIFY_MATCH_RESULTS,
@@ -59,6 +60,7 @@ from .const import (
     YT_SEARCH_SIZE,
 )
 from . import spotify
+from .playlists import PlaylistStore
 from .stations import StationStore
 from .debuglog import dlog
 from .stream_view import short_url
@@ -96,7 +98,7 @@ MAX_QUICK_ENDS = 3
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     data = hass.data[DOMAIN][entry.entry_id]
-    player = HomeRadioPlayer(entry, data["stations"])
+    player = HomeRadioPlayer(entry, data["stations"], data["playlists"])
     data["player"] = player
     async_add_entities([player])
 
@@ -128,6 +130,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     platform.async_register_entity_service(
         SERVICE_PLAY_SPOTIFY, {vol.Required("url"): cv.string}, "async_play_spotify",
     )
+    platform.async_register_entity_service(
+        SERVICE_REMOVE_LIST, {vol.Required("list"): cv.string}, "async_remove_list",
+    )
 
 
 class HomeRadioPlayer(MediaPlayerEntity):
@@ -137,10 +142,11 @@ class HomeRadioPlayer(MediaPlayerEntity):
     _attr_supported_features = SUPPORTED
     _attr_media_content_type = MediaType.MUSIC
     # Station list and queue are for the card, not for history.
-    _unrecorded_attributes = frozenset({"stations", "queue", "recent_searches"})
+    _unrecorded_attributes = frozenset({"stations", "queue", "recent_searches", "saved_lists"})
 
-    def __init__(self, entry: ConfigEntry, stations: StationStore) -> None:
+    def __init__(self, entry: ConfigEntry, stations: StationStore, playlists: PlaylistStore) -> None:
         self._entry = entry
+        self._playlists = playlists
         self._target: str = entry.options.get(CONF_TARGET) or entry.data.get(CONF_TARGET, DEFAULT_TARGET)
         self._stations = stations
         self._attr_unique_id = f"{entry.entry_id}_player"
@@ -163,7 +169,8 @@ class HomeRadioPlayer(MediaPlayerEntity):
         self._quick_ends = 0
         # Set while the current track came from a phone casting through the Home Cast add-on.
         self._cast_sender: str | None = None
-        # Name of the Spotify playlist/album the queue came from.
+        # The Spotify playlist/album the queue came from (a saved list's id, and its name).
+        self._list_id: str | None = None
         self._list_name: str | None = None
 
     # ---- lifecycle -------------------------------------------------------------------------
@@ -173,6 +180,7 @@ class HomeRadioPlayer(MediaPlayerEntity):
             async_track_state_change_event(self.hass, [self._target], self._on_target_change)
         )
         self.async_on_remove(self._stations.add_listener(self.async_write_ha_state))
+        self.async_on_remove(self._playlists.add_listener(self.async_write_ha_state))
 
     @callback
     def _on_target_change(self, event: Event[EventStateChangedData]) -> None:
@@ -318,6 +326,8 @@ class HomeRadioPlayer(MediaPlayerEntity):
             "target": self._target,
             "cast_sender": self._cast_sender,
             "queue_name": self._list_name if self._kind == KIND_YOUTUBE else None,
+            "queue_list_id": self._list_id if self._kind == KIND_YOUTUBE else None,
+            "saved_lists": self._playlists.summary(),
         }
 
     # ---- playing -----------------------------------------------------------------------------
@@ -346,6 +356,7 @@ class HomeRadioPlayer(MediaPlayerEntity):
 
     async def _async_start_station(self, station: dict[str, str]) -> None:
         self._end_cast()
+        self._list_id = self._list_name = None
         self._seq += 1
         self._kind, self._station, self._now = KIND_STATION, station, None
         self._queue, self._index = [], -1
@@ -406,6 +417,9 @@ class HomeRadioPlayer(MediaPlayerEntity):
         track.video_id, track.url, track.thumbnail = best.video_id, best.url, best.thumbnail
         if not track.duration:
             track.duration = best.duration
+        if self._list_id is not None:
+            index = next((i for i, t in enumerate(self._queue) if t is track), -1)
+            self._playlists.remember_match(self._list_id, index, best.video_id, best.thumbnail)
         return True
 
     async def _async_more_for_queue(self) -> bool:
@@ -484,29 +498,76 @@ class HomeRadioPlayer(MediaPlayerEntity):
         if not results:
             raise HomeAssistantError(f"Δεν βρέθηκαν αποτελέσματα για: {query}")
         self._end_cast()
-        self._query, self._list_name = query, None
+        self._query, self._list_id, self._list_name = query, None, None
         self._queue, self._played = list(results), set()
         await self._async_play_queue_item(start)
 
     async def async_play_spotify(self, url: str) -> None:
         """A Spotify playlist, album or song (the link as shared from the app): its songs become
         the queue, each one played from YouTube. No Spotify account is involved."""
+        link = spotify.parse_link(url)
+        list_id = f"{link[0]}:{link[1]}" if link else None
         found = await spotify.async_fetch(self.hass, url)
         if found is None or not found.songs:
-            raise HomeAssistantError("Δεν μπόρεσα να διαβάσω αυτό το link του Spotify (είναι δημόσια η λίστα;)")
+            saved = self._playlists.get(list_id) if list_id else None
+            if saved is None:
+                raise HomeAssistantError("Δεν μπόρεσα να διαβάσω αυτό το link του Spotify (είναι δημόσια η λίστα;)")
+            # Spotify unreachable right now: the saved copy plays.
+            await self._async_start_list(saved)
+            return
         dlog(self.hass, f"SPOTIFY {found.kind} {found.name!r}: {len(found.songs)} songs")
+        if list_id and found.kind in ("playlist", "album"):
+            # Kept for next time (a single song isn't worth a place among the lists).
+            await self._async_start_list(self._playlists.save(list_id, url, found))
+            return
         self._end_cast()
-        self._query, self._list_name = None, found.name
+        self._query, self._list_id, self._list_name = None, None, found.name
         self._queue = [YoutubeTrack("", "", s.title, s.artists, s.duration, found.image, query=s.query)
                        for s in found.songs]
         self._played = set()
         await self._async_play_queue_item(0)
 
+    async def _async_start_list(self, saved: dict[str, Any]) -> None:
+        """Plays a saved list; songs matched before start without searching."""
+        self._end_cast()
+        self._query, self._list_id, self._list_name = None, saved["id"], saved["name"]
+        self._queue = [
+            YoutubeTrack(vid, f"https://www.youtube.com/watch?v={vid}" if vid else "", s.title, s.artists,
+                         s.duration, f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg" if vid else saved.get("image", ""),
+                         query=s.query)
+            for s, vid in self._playlists.songs(saved)
+        ]
+        self._played = set()
+        self._playlists.touch(saved["id"])
+        await self._async_play_queue_item(0)
+
+    async def async_play_saved(self, key: str) -> None:
+        saved = self._playlists.find(key)
+        if saved is None:
+            raise HomeAssistantError(f"Δεν βρέθηκε αποθηκευμένη λίστα: {key}")
+        await self._async_start_list(saved)
+        # Meanwhile pick up songs added to it on Spotify since, for next time.
+        self.hass.async_create_task(self._async_refresh_saved(saved["id"], saved["url"]))
+
+    async def _async_refresh_saved(self, list_id: str, url: str) -> None:
+        found = await spotify.async_fetch(self.hass, url)
+        if found is not None and found.songs and self._playlists.get(list_id) is not None:
+            self._playlists.save(list_id, url, found)
+            self._playlists.touch(list_id)
+
+    async def async_remove_list(self, list: str) -> None:  # noqa: A002 - the service field's name
+        saved = self._playlists.find(list)
+        if saved is None or not self._playlists.remove(saved["id"]):
+            raise HomeAssistantError(f"Δεν βρέθηκε αποθηκευμένη λίστα: {list}")
+        if self._list_id == saved["id"]:
+            self._list_id = None
+            self.async_write_ha_state()
+
     async def async_play_cast(self, video_id: str, position: float = 0, sender: str | None = None) -> ServiceResponse:
         """One track sent by the Home Cast add-on. The phone keeps the queue, so there's no
         autoplay here: the end of the track is reported back with a home_radio_cast event."""
         self._cast_sender = sender or "YouTube"
-        self._query, self._list_name = None, None
+        self._query, self._list_id, self._list_name = None, None, None
         self._queue = [YoutubeTrack(video_id, f"https://www.youtube.com/watch?v={video_id}", "", "", 0,
                                     f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg")]
         self._played = set()
@@ -601,6 +662,8 @@ class HomeRadioPlayer(MediaPlayerEntity):
             media_id = play.url if play.url.startswith("http") else self.hass.config.api.base_url + play.url
         if media_id.startswith("queue:") and media_id.removeprefix("queue:").isdigit():
             await self._async_play_queue_item(int(media_id.removeprefix("queue:")))
+        elif media_id.startswith("list:"):
+            await self.async_play_saved(media_id.removeprefix("list:"))
         elif spotify.is_link(media_id):
             await self.async_play_spotify(media_id)
         elif media_id.startswith("station:"):
@@ -655,10 +718,22 @@ class HomeRadioPlayer(MediaPlayerEntity):
                 for i, t in enumerate(self._queue)
             ],
         )
-        folders = {"stations": stations_dir, "recent": recent_dir, "queue": queue_dir}
+        lists = self._playlists.summary()
+        lists_dir = BrowseMedia(
+            media_class=MediaClass.DIRECTORY, media_content_id="lists", media_content_type="home_radio",
+            title="Λίστες", can_play=False, can_expand=True, children_media_class=MediaClass.PLAYLIST,
+            children=[
+                BrowseMedia(media_class=MediaClass.PLAYLIST, media_content_id=f"list:{p['id']}",
+                            media_content_type="playlist", title=p["name"], can_play=True, can_expand=False,
+                            thumbnail=p["image"] or None)
+                for p in lists
+            ],
+            thumbnail="https://fonts.gstatic.com/s/e/notoemoji/latest/1f3b6/512.png",
+        )
+        folders = {"stations": stations_dir, "lists": lists_dir, "recent": recent_dir, "queue": queue_dir}
         if media_content_id in folders:
             return folders[media_content_id]
-        shown = [stations_dir, recent_dir] + ([queue_dir] if self._queue else [])
+        shown = [stations_dir] + ([lists_dir] if lists else []) + [recent_dir] + ([queue_dir] if self._queue else [])
         return BrowseMedia(
             media_class=MediaClass.DIRECTORY, media_content_id="root", media_content_type="home_radio",
             title="Home Radio", can_play=False, can_expand=True,

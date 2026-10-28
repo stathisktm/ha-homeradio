@@ -1,7 +1,7 @@
 /*! Home Radio card — MIT License */
 // type: custom:home-radio-card
 // entity: media_player.home_radio     # optional, found automatically
-// tabs: [stations, youtube, queue]    # optional
+// tabs: [stations, lists, youtube, queue]    # optional
 
 const ICONS = {
   play: "M8 5.14v13.72L19 12z",
@@ -100,6 +100,14 @@ ha-card { display:block; position:relative; overflow:hidden; padding:0; }
 .spin { width:22px; height:22px; border:3px solid rgba(127,127,127,.25); border-top-color:var(--hr-accent); border-radius:50%;
   animation:spin .8s linear infinite; margin:24px auto; }
 @keyframes spin { to { transform:rotate(360deg); } }
+.pl { position:relative; }
+.pl .logo { background-size:cover; background-color:#222; }
+.pl .count { position:absolute; left:8px; bottom:8px; font-size:.68rem; font-weight:700; color:#fff;
+  background:rgba(0,0,0,.55); padding:2px 7px; border-radius:99px; }
+.pl .del { position:absolute; top:4px; right:4px; width:24px; height:24px; border:0; border-radius:50%; cursor:pointer;
+  background:rgba(0,0,0,.55); color:#fff; font-size:15px; line-height:24px; padding:0; opacity:0; transition:opacity .2s; }
+.pl:hover .del, .pl:focus-within .del { opacity:1; }
+@media (hover: none) { .pl .del { opacity:.8; } }
 @media (max-width: 420px) { .art { width:92px; height:92px; } .title { font-size:1.15rem; } }
 `;
 
@@ -110,7 +118,7 @@ class HomeRadioCard extends HTMLElement {
   }
 
   setConfig(config) {
-    this._config = { tabs: ["stations", "youtube", "queue"], ...config };
+    this._config = { tabs: ["stations", "lists", "youtube", "queue"], ...config };
     this._tab = this._config.tabs[0];
     this._built = false;
   }
@@ -134,9 +142,9 @@ class HomeRadioCard extends HTMLElement {
   _build() {
     this._built = true;
     // A rebuilt DOM (card re-attached) starts empty, so every cached render key must go too.
-    this._img = this._stKey = this._recentKey = this._queueKey = undefined;
+    this._img = this._stKey = this._recentKey = this._queueKey = this._listsKey = undefined;
     const root = this.shadowRoot || this.attachShadow({ mode: "open" });
-    const tabNames = { stations: "Σταθμοί", youtube: "YouTube", queue: "Ουρά" };
+    const tabNames = { stations: "Σταθμοί", lists: "Λίστες", youtube: "YouTube", queue: "Ουρά" };
     root.innerHTML = `<style>${STYLE}</style>
       <ha-card>
         <div class="hero empty">
@@ -164,6 +172,7 @@ class HomeRadioCard extends HTMLElement {
           <form class="searchbox"><input placeholder="Αναζήτηση στο YouTube ή link Spotify…" enterkeyhint="search"><button>${svg(ICONS.search, 22)}</button></form>
           <div class="recent"></div><div class="list results"><div class="muted">Γράψε καλλιτέχνη, τραγούδι ή είδος.</div></div>
         </div>
+        <div class="pane" data-pane="lists"></div>
         <div class="pane" data-pane="queue"><div class="list queue"></div></div>
       </ha-card>`;
     const $ = (s) => root.querySelector(s);
@@ -191,6 +200,15 @@ class HomeRadioCard extends HTMLElement {
     $('[data-pane="stations"]').addEventListener("click", (ev) => {
       const id = ev.target.closest(".st")?.dataset.id;
       if (id) this._call("home_radio.play_station", { station: id });
+    });
+    $('[data-pane="lists"]').addEventListener("click", (ev) => {
+      const tile = ev.target.closest(".pl");
+      if (!tile) return;
+      if (ev.target.closest(".del")) {
+        if (confirm(`Αφαίρεση της λίστας «${tile.dataset.name}»;`)) this._call("home_radio.remove_list", { list: tile.dataset.id });
+        return;
+      }
+      this._call("play_media", { media_content_id: `list:${tile.dataset.id}`, media_content_type: "playlist" });
     });
     $(".searchbox").addEventListener("submit", (ev) => { ev.preventDefault(); this._search($(".searchbox input").value); });
     $(".recent").addEventListener("click", (ev) => {
@@ -297,6 +315,20 @@ class HomeRadioCard extends HTMLElement {
     if (this._recentKey !== recent.join("|")) {
       this._recentKey = recent.join("|");
       $(".recent").innerHTML = recent.map((q) => `<button data-q="${esc(q)}">${esc(q)}</button>`).join("");
+    }
+
+    const lists = a.saved_lists || [];
+    const lkey = JSON.stringify(lists) + "|" + (a.queue_list_id || "");
+    if (this._listsKey !== lkey && $('[data-pane="lists"]')) {
+      this._listsKey = lkey;
+      $('[data-pane="lists"]').innerHTML = lists.length ? `<div class="grid">${lists.map((l) => `
+        <div class="st pl${l.id === a.queue_list_id ? " on" : ""}" role="button" tabindex="0" data-id="${esc(l.id)}" data-name="${esc(l.name)}">
+          <div class="logo${l.image ? "" : " text"}" ${l.image ? `style="background-image:url('${esc(l.image)}')"` : ""}>${l.image ? "" : "♫"}
+            <span class="count">${l.count}</span>${l.id === a.queue_list_id ? `<span class="eq"><i></i><i></i><i></i><i></i></span>` : ""}
+            <button class="del" title="Αφαίρεση">×</button></div>
+          <div class="name">${esc(l.name)}</div>
+        </div>`).join("")}</div>`
+        : `<div class="muted">Καμία λίστα ακόμα.<br>Επικόλλησε ένα link λίστας ή άλμπουμ του Spotify στην καρτέλα YouTube· κρατιέται εδώ για την επόμενη φορά.</div>`;
     }
 
     const qkey = JSON.stringify(a.queue || []) + "|" + a.queue_index;

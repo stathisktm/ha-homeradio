@@ -28,6 +28,7 @@ SERVICE_SEARCH_YOUTUBE = "search_youtube"
 SERVICE_REFRESH_STATIONS = "refresh_stations"
 SERVICE_PLAY_CAST = "play_cast"
 SERVICE_PLAY_SPOTIFY = "play_spotify"
+SERVICE_REMOVE_LIST = "remove_list"
 
 # A Spotify song is matched to the first YouTube result this close to its length.
 SPOTIFY_MATCH_RESULTS = 6

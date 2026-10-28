@@ -11,7 +11,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items as rowItems
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,6 +45,7 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -77,6 +83,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
@@ -104,7 +111,26 @@ class MainActivity : ComponentActivity() {
         val prefs = Prefs(this)
         if (prefs.haUrl == Prefs.DEFAULT_URL && BuildConfig.DEFAULT_HA_URL.isNotBlank()) prefs.haUrl = BuildConfig.DEFAULT_HA_URL
         HaHub.start(this)
+        if (savedInstanceState == null) handleShare(intent)
         setContent { MaterialTheme(colorScheme = Colors) { App(prefs) } }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleShare(intent)
+    }
+
+    /** Share -> Home Radio: a Spotify playlist/album/song or a YouTube link plays (and a Spotify
+     *  list is kept among the Lists); anything else is searched on YouTube. */
+    private fun handleShare(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_SEND) return
+        val text = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim().orEmpty()
+        if (text.isEmpty()) return
+        val link = Regex("""https?://\S+""").findAll(text).map { it.value }
+            .firstOrNull { "spotify" in it || "youtu" in it }
+        HaHub.callSoon("home_radio", "play_youtube", mapOf("query" to (link ?: text)))
+        Toast.makeText(this, if (link != null && "spotify" in link) "Παίζει στο Home Radio · κρατιέται στις Λίστες"
+            else "Παίζει στο Home Radio", Toast.LENGTH_SHORT).show()
     }
 
     // Connecting a controller is what brings PlaybackService (and so the shade controls) up.
@@ -142,6 +168,10 @@ class MainActivity : ComponentActivity() {
                 item(span = { GridItemSpan(maxLineSpan) }) { NowPlaying(s) }
                 item(span = { GridItemSpan(maxLineSpan) }) { VolumeKeys(prefs) }
                 item(span = { GridItemSpan(maxLineSpan) }) { YoutubeSearch() }
+                val lists = s?.list("saved_lists").orEmpty().mapNotNull { it as? JsonObject }
+                if (lists.isNotEmpty()) {
+                    item(span = { GridItemSpan(maxLineSpan) }) { SavedLists(lists, s?.str("queue_list_id")) }
+                }
                 val stations = s?.list("stations").orEmpty().mapNotNull { it as? JsonObject }
                 if (stations.isNotEmpty()) {
                     item(span = { GridItemSpan(maxLineSpan) }) {
@@ -275,11 +305,69 @@ class MainActivity : ComponentActivity() {
         val search = { if (query.isNotBlank()) HaHub.call("home_radio", "play_youtube", mapOf("query" to query.trim())) }
         OutlinedTextField(
             query, { query = it }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("Αναζήτηση στο YouTube…") },
+            placeholder = { Text("Αναζήτηση στο YouTube ή link Spotify…") },
             trailingIcon = { IconButton(onClick = search) { Icon(Icons.Default.Search, "Αναζήτηση") } },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { search() }),
         )
+    }
+
+    /** Spotify playlists/albums played before, kept by Home Radio: tap plays, long press removes. */
+    @OptIn(ExperimentalFoundationApi::class)
+    @Composable
+    private fun SavedLists(lists: List<JsonObject>, playingId: String?) {
+        var removing by remember { mutableStateOf<JsonObject?>(null) }
+        Column {
+            Text("Λίστες", fontWeight = FontWeight.Bold, color = Color.Gray, modifier = Modifier.padding(top = 8.dp, bottom = 8.dp))
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                rowItems(lists, key = { it.text("id").orEmpty() }) { l ->
+                    val id = l.text("id") ?: return@rowItems
+                    val active = id == playingId
+                    Column(Modifier.width(112.dp).combinedClickable(
+                        onClick = {
+                            HaHub.mediaPlayer("play_media", mapOf("media_content_id" to "list:$id", "media_content_type" to "playlist"))
+                        },
+                        onLongClick = { removing = l },
+                    )) {
+                        Box(
+                            Modifier.size(112.dp).clip(RoundedCornerShape(18.dp))
+                                .background(if (active) Accent else Color(0xFF2A3140)).padding(if (active) 3.dp else 0.dp)
+                                .clip(RoundedCornerShape(16.dp)).background(Color(0xFF2A3140)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            val img = l.text("image")
+                            if (!img.isNullOrBlank()) {
+                                AsyncImage(img, l.text("name"), contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                            } else {
+                                Text("♫", fontSize = 40.sp, color = Color.White)
+                            }
+                            Text(l.text("count").orEmpty(), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White,
+                                modifier = Modifier.align(Alignment.BottomStart).padding(6.dp)
+                                    .clip(RoundedCornerShape(99.dp)).background(Color.Black.copy(alpha = 0.55f))
+                                    .padding(horizontal = 7.dp, vertical = 2.dp))
+                        }
+                        Text(l.text("name").orEmpty(), fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 4.dp))
+                    }
+                }
+            }
+            Text("Πρόσθεσε λίστα: στο Spotify → Κοινοποίηση → Home Radio. Κράτα πατημένη μια λίστα για αφαίρεση.",
+                fontSize = 11.sp, color = Color.Gray, modifier = Modifier.padding(top = 6.dp))
+        }
+        removing?.let { l ->
+            AlertDialog(
+                onDismissRequest = { removing = null },
+                title = { Text("Αφαίρεση λίστας") },
+                text = { Text("Να αφαιρεθεί η «${l.text("name").orEmpty()}» από τις Λίστες;") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        HaHub.call("home_radio", "remove_list", mapOf("list" to l.text("id").orEmpty()))
+                        removing = null
+                    }) { Text("Αφαίρεση") }
+                },
+                dismissButton = { TextButton(onClick = { removing = null }) { Text("Άκυρο") } },
+            )
+        }
     }
 
     @Composable

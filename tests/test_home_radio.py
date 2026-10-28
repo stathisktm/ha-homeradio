@@ -417,3 +417,46 @@ async def test_spotify_unreadable_link_raises(hass, aioclient_mock, calls):
     with pytest.raises(Exception, match="Spotify"):
         await hass.services.async_call(DOMAIN, "play_spotify", {
             "entity_id": ENTITY, "url": "https://open.spotify.com/album/4LH4d3cOWNNsVw41Gqt2kv"}, blocking=True)
+
+
+async def test_spotify_list_is_saved_and_replays_without_searching(hass, hass_storage, aioclient_mock, calls):
+    aioclient_mock.get("https://open.spotify.com/embed/album/4LH4d3cOWNNsVw41Gqt2kv", text=_fixture("spotify_album.html"))
+    searches = []
+
+    async def search(hass_, query, size):
+        searches.append(query)
+        n = len(searches)
+        return [YoutubeTrack(f"m{n}", f"https://www.youtube.com/watch?v=m{n}", "x", "c", 0, f"th{n}")]
+
+    with patch(f"{MP}.async_search", side_effect=search), patch(f"{MP}.async_resolve", side_effect=_resolved):
+        await hass.services.async_call(DOMAIN, "play_spotify", {
+            "entity_id": ENTITY, "url": "https://open.spotify.com/album/4LH4d3cOWNNsVw41Gqt2kv"}, blocking=True)
+        await hass.async_block_till_done()
+        st = hass.states.get(ENTITY)
+        saved = st.attributes["saved_lists"]
+        assert [(l["id"], l["name"], l["count"]) for l in saved] == [
+            ("album:4LH4d3cOWNNsVw41Gqt2kv", "The Dark Side of the Moon", 3)]
+        assert saved[0]["image"] == "th1"  # albums have no cover: the first song's picture
+        assert st.attributes["queue_list_id"] == "album:4LH4d3cOWNNsVw41Gqt2kv"
+        n = len(searches)  # first song + the look-ahead for the second
+
+        # a station in between, then the saved list from the card/app
+        await hass.services.async_call("media_player", "select_source", {"entity_id": ENTITY, "source": "Fly FM"}, blocking=True)
+        await hass.services.async_call("media_player", "play_media", {
+            "entity_id": ENTITY, "media_content_id": "list:album:4LH4d3cOWNNsVw41Gqt2kv",
+            "media_content_type": "playlist"}, blocking=True)
+        await hass.async_block_till_done()
+        assert last_url(calls) == "https://audio/m1"
+        assert len(searches) == n  # the matches were remembered: no searching again
+
+        # it survives a restart (written to HA's storage)
+        from homeassistant.const import EVENT_HOMEASSISTANT_FINAL_WRITE
+        hass.bus.async_fire(EVENT_HOMEASSISTANT_FINAL_WRITE)  # what HA does on shutdown
+        await hass.async_block_till_done()
+        stored = next(v for k, v in hass_storage.items() if k.endswith(".playlists"))
+        assert stored["data"]["lists"]["album:4LH4d3cOWNNsVw41Gqt2kv"]["songs"][0]["video_id"] == "m1"
+
+        # and can be removed by name
+        await hass.services.async_call(DOMAIN, "remove_list", {"entity_id": ENTITY, "list": "the dark side of the moon"},
+                                       blocking=True)
+        assert hass.states.get(ENTITY).attributes["saved_lists"] == []
