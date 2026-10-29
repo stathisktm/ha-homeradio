@@ -16,7 +16,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from .const import CARD_URL, CONF_TV_URLS, DOMAIN, SERVICE_REFRESH_STATIONS, STATION_SYNC_INTERVAL_S
 from .playlists import PlaylistStore
 from .stations import StationStore
-from .stream_view import YoutubeStreamView
+from .stream_view import MixStreamView, YoutubeStreamView
 
 PLATFORMS: list[Platform] = [Platform.MEDIA_PLAYER, Platform.NUMBER, Platform.TEXT]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -52,6 +52,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not hass.data.get(f"{DOMAIN}_view") and getattr(hass, "http", None) is not None:
         hass.data[f"{DOMAIN}_view"] = True
         hass.http.register_view(YoutubeStreamView())
+        hass.http.register_view(MixStreamView())
     stations = StationStore(hass, entry.entry_id, tv_urls(entry))
     await stations.async_load()
     playlists = PlaylistStore(hass, entry.entry_id)

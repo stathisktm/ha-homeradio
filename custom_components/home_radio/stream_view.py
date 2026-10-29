@@ -148,3 +148,65 @@ class YoutubeStreamView(HomeAssistantView):
         finally:
             await hass.async_add_executor_job(upstream.close)
         return response
+
+
+# ---- the mixed stream ------------------------------------------------------------------------
+
+MIX_PATH = "/api/home_radio/mix"
+_MIX_KEY = f"{DOMAIN}_mixes"
+
+
+def register_mix(hass: HomeAssistant, session: Any) -> str:
+    """Makes a MixSession reachable for the player; returns its path."""
+    mixes = hass.data.setdefault(_MIX_KEY, {})
+    for token in [t for t, s in mixes.items() if s.closed.is_set()]:
+        mixes.pop(token)
+    mixes[session.token] = session
+    return f"{MIX_PATH}/{session.token}"
+
+
+class MixStreamView(HomeAssistantView):
+    """The endless WAV stream a MixSession makes (no auth, like the relay: the token is it)."""
+
+    url = MIX_PATH + "/{token}"
+    name = "api:home_radio:mix"
+    requires_auth = False
+
+    async def head(self, request: web.Request, token: str) -> web.StreamResponse:
+        if token not in request.app["hass"].data.get(_MIX_KEY, {}):
+            return web.Response(status=404)
+        return web.Response(headers={"Content-Type": "audio/wav", "Cache-Control": "no-cache"})
+
+    async def get(self, request: web.Request, token: str) -> web.StreamResponse:
+        from . import mixer
+
+        hass: HomeAssistant = request.app["hass"]
+        session = hass.data.get(_MIX_KEY, {}).get(token)
+        if session is None or session.closed.is_set():
+            return web.Response(status=404)
+        dlog(hass, f"MIXVIEW GET from {request.remote} ua={request.headers.get('User-Agent', '-')[:30]}")
+        response = web.StreamResponse(headers={"Content-Type": "audio/wav", "Cache-Control": "no-cache"})
+        await response.prepare(request)
+        pacer, sent = mixer.Pacer(), 0
+        try:
+            await response.write(mixer.wav_header())
+            while True:
+                item = await hass.async_add_executor_job(session.get)
+                if item is None:
+                    break
+                data, tag, pos = item
+                await response.write(data)
+                sent += len(data)
+                if session.on_heard is not None:
+                    session.on_heard(tag, pos)
+                delay = pacer.delay_for(len(data) / (mixer.RATE * mixer.BYTES_PER_FRAME))
+                if delay:
+                    await asyncio.sleep(delay)
+            await response.write_eof()
+            dlog(hass, f"MIXVIEW finished after {sent} bytes")
+        except (ConnectionResetError, asyncio.CancelledError, aiohttp.ClientError) as err:
+            # VLC stopping, or switching to something else. The session is closed by the player.
+            dlog(hass, f"MIXVIEW ended after {sent} bytes: {type(err).__name__}")
+            if isinstance(err, asyncio.CancelledError):
+                raise
+        return response

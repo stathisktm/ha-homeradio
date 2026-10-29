@@ -49,6 +49,8 @@ class ResolvedAudio:
     # way from the HA host they came back 403. Takes extra headers (Range), blocking.
     opener: Any = None
     diag: str = ""
+    # The whole audio file, once fetched for the mixer.
+    data: bytes | None = None
 
 
 def _thumb(video_id: str) -> str:

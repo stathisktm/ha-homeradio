@@ -19,3 +19,15 @@ if sys.platform == "win32":
 @pytest.fixture(autouse=True)
 def auto_enable_custom_integrations(enable_custom_integrations):
     yield
+
+
+@pytest.fixture(autouse=True)
+def _mixer_only_when_asked(request):
+    """The mixed stream needs real audio; tests opt in with @pytest.mark.mixer."""
+    if request.node.get_closest_marker("mixer"):
+        yield
+        return
+    from unittest.mock import patch
+
+    with patch("custom_components.home_radio.mixer.AVAILABLE", False):
+        yield

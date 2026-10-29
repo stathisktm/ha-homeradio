@@ -68,11 +68,11 @@ from .const import (
     YT_MUSIC_MIN_S,
     YT_SEARCH_SIZE,
 )
-from . import spotify
+from . import mixer, spotify
 from .playlists import PlaylistStore
 from .stations import StationStore
 from .debuglog import dlog
-from .stream_view import short_url
+from .stream_view import register_mix, short_url
 from .youtube import ResolvedAudio, YoutubeTrack, async_resolve, async_search
 
 _LOGGER = logging.getLogger(__name__)
@@ -197,6 +197,14 @@ class HomeRadioPlayer(MediaPlayerEntity):
         self._prepared: tuple[int, str, ResolvedAudio, float] | None = None  # index, video, audio, when
         self._preparing = False
         self._mixing = False
+        # The mixed stream (real crossfades): the session, what each of its tags is, and what's
+        # being heard of it now.
+        self._mix: mixer.MixSession | None = None
+        self._mix_tracks: dict[int, tuple[int, ResolvedAudio]] = {}
+        self._mix_tag = 0
+        self._heard: tuple[int, float] | None = None
+        self._heard_at: datetime | None = None
+        self._heard_written = 0.0
 
     # ---- lifecycle -------------------------------------------------------------------------
 
@@ -217,7 +225,17 @@ class HomeRadioPlayer(MediaPlayerEntity):
         # A YouTube track that ran out (playing -> idle, not something we stopped) continues
         # with the next one, like the TV app's autoplay.
         if (
+            self._mix is not None
+            and old is not None and new is not None
+            and old.state == STATE_PLAYING and new.state not in (STATE_PLAYING, STATE_PAUSED, STATE_BUFFERING)
+            and not self._loading and self.hass.loop.time() - self._started_at > 5
+        ):
+            # The mixed stream ran out (end of the queue) or VLC was stopped.
+            dlog(self.hass, "MIX stream over")
+            self._close_mix()
+        elif (
             self._kind == KIND_YOUTUBE
+            and self._mix is None
             and not self._loading
             and not self._stopping
             and not self._mixing
@@ -313,6 +331,8 @@ class HomeRadioPlayer(MediaPlayerEntity):
 
     @property
     def media_duration(self) -> int | None:
+        if self._mixed:
+            return (self._now.duration or None) if self._now else None
         if self._kind == KIND_YOUTUBE:
             # VLC says -1 until it knows the length: fall back to what YouTube/Spotify said.
             vlc = self._tattr("media_duration")
@@ -323,11 +343,16 @@ class HomeRadioPlayer(MediaPlayerEntity):
 
     @property
     def media_position(self) -> int | None:
+        if self._mixed and self._heard is not None:
+            # what's been sent is a little ahead of what's heard
+            return max(0, int(self._heard_pos - mixer.LEAD_S - mixer.VLC_CACHE_S))
         pos = self._tattr("media_position") if self._kind == KIND_YOUTUBE else None
         return pos if isinstance(pos, (int, float)) and pos >= 0 else None
 
     @property
     def media_position_updated_at(self) -> datetime | None:
+        if self._mixed:
+            return self._heard_at
         return self._tattr("media_position_updated_at") if self._kind == KIND_YOUTUBE else None
 
     @property
@@ -389,6 +414,7 @@ class HomeRadioPlayer(MediaPlayerEntity):
 
     async def _async_start_station(self, station: dict[str, str]) -> None:
         self._end_cast()
+        self._close_mix()
         self._list_id = self._list_name = None
         self._seq += 1
         self._kind, self._station, self._now = KIND_STATION, station, None
@@ -435,6 +461,14 @@ class HomeRadioPlayer(MediaPlayerEntity):
             # Look the next song up now, so it starts without the search delay.
             self.hass.async_create_task(self._async_match(nxt))
         self._played.add(track.video_id)
+        if self._use_mixer():
+            try:
+                if await self._async_mix_in(index, resolved):
+                    return
+            finally:
+                self._loading = False
+                self.async_write_ha_state()
+        self._close_mix()
         try:
             # Short HA-served redirect instead of the ~1100-char googlevideo URL — see stream_view.
             await self._play_url(short_url(self.hass, resolved.stream_url, resolved.headers, resolved.opener))
@@ -468,6 +502,15 @@ class HomeRadioPlayer(MediaPlayerEntity):
         if (self._kind != KIND_YOUTUBE or self._cast_sender is not None or self._loading
                 or self._mixing or self._stopping):
             return
+        if self._mixed:
+            # The mixer itself brings the next track in; it only has to be ready by then.
+            nxt = self._next_index()
+            duration = self._now.duration if self._now else 0
+            if nxt is not None and duration and self._heard is not None and not self._preparing \
+                    and duration - self._heard_pos <= PREPARE_AHEAD_S \
+                    and not (self._prepared is not None and self._prepared[0] == nxt):
+                self.hass.async_create_task(self._async_prepare(nxt))
+            return
         if self.hass.loop.time() - self._started_at < SETTLE_S:
             return
         remaining = self._remaining_s()
@@ -498,11 +541,128 @@ class HomeRadioPlayer(MediaPlayerEntity):
             if not await self._async_match(track):
                 return
             resolved = await async_resolve(self.hass, track.url)
+            if resolved is not None and self._use_mixer():
+                resolved.data = await self._async_fetch(resolved)
             if resolved is not None and seq == self._seq:
                 self._prepared = (index, track.video_id, resolved, self.hass.loop.time())
                 dlog(self.hass, f"PREPARED {track.url}")
         finally:
             self._preparing = False
+
+    # ---- the mixed stream ---------------------------------------------------------------------
+
+    @property
+    def _mixed(self) -> bool:
+        return self._mix is not None and self._kind == KIND_YOUTUBE
+
+    @property
+    def _heard_pos(self) -> float:
+        return self._heard[1] if self._heard else 0.0
+
+    def _use_mixer(self) -> bool:
+        return mixer.AVAILABLE and self.crossfade_s > 0 and self._cast_sender is None
+
+    @callback
+    def _close_mix(self) -> None:
+        if self._mix is not None:
+            self._mix.close()
+            self._mix = None
+        self._mix_tracks.clear()
+        self._heard = None
+
+    async def _async_fetch(self, resolved: ResolvedAudio) -> bytes | None:
+        if resolved.data:
+            return resolved.data
+        try:
+            return await self.hass.async_add_executor_job(mixer.fetch, resolved)
+        except Exception as err:  # noqa: BLE001 - then this track plays the plain way
+            dlog(self.hass, f"MIX fetch failed: {err!r}")
+            return None
+
+    def _new_tag(self, index: int, resolved: ResolvedAudio) -> int:
+        self._mix_tag += 1
+        self._mix_tracks[self._mix_tag] = (index, resolved)
+        for old in [t for t in self._mix_tracks if t < self._mix_tag - 4]:  # (each holds a few MB)
+            self._mix_tracks.pop(old)
+        return self._mix_tag
+
+    async def _async_mix_in(self, index: int, resolved: ResolvedAudio, start_s: float = 0.0) -> bool:
+        """Plays a track through the mixer: mixed quickly into what's playing if the stream is
+        already on, else as a new stream. False if it can't (then it's played the plain way)."""
+        resolved.data = await self._async_fetch(resolved)
+        if not resolved.data:
+            return False
+        track = mixer.Track(self._new_tag(index, resolved), resolved, start_s)
+        tgt = self._tgt
+        live = self._mix is not None and not self._mix.ended and not self._mix.closed.is_set()
+        if live and tgt is not None and tgt.state in (STATE_PLAYING, STATE_BUFFERING, STATE_PAUSED):
+            dlog(self.hass, f"MIX jump #{index} at {start_s:.0f}s")
+            self._mix.jump(track)
+            if tgt.state == STATE_PAUSED:
+                await self._send("media_play")
+            return True
+        self._close_mix()
+        session = mixer.MixSession(track, self._mix_ask_next, lambda: self.crossfade_s)
+        session.on_heard = self._on_heard
+        self._mix = session
+        self._heard, self._heard_at = (track.tag, start_s), dt_util.utcnow()
+        dlog(self.hass, f"MIX stream #{index}")
+        await self._play_url(register_mix(self.hass, session))
+        return True
+
+    def _mix_ask_next(self) -> mixer.Track | None:
+        """From the mixer's thread: the track to mix in next."""
+        future = asyncio.run_coroutine_threadsafe(self._async_mix_next(), self.hass.loop)
+        try:
+            return future.result(timeout=60)
+        except Exception:  # noqa: BLE001 - nothing to mix in: the stream ends after this track
+            _LOGGER.warning("home_radio: no next track for the mix", exc_info=True)
+            return None
+
+    async def _async_mix_next(self) -> mixer.Track | None:
+        nxt = self._next_index()
+        if nxt is None and await self._async_more_for_queue():
+            nxt = self._next_index()
+        for _ in range(MAX_SKIPS):
+            if nxt is None:
+                return None
+            track = self._queue[nxt]
+            prepared, self._prepared = self._prepared, None
+            if prepared is not None and prepared[0] == nxt and prepared[1] == track.video_id:
+                resolved = prepared[2]
+            else:
+                resolved = await async_resolve(self.hass, track.url) if await self._async_match(track) else None
+            if resolved is not None:
+                resolved.data = await self._async_fetch(resolved)
+            if resolved is not None and resolved.data:
+                if track.query:
+                    resolved.title, resolved.channel = track.title, track.channel
+                dlog(self.hass, f"MIX next #{nxt} {track.video_id}")
+                return mixer.Track(self._new_tag(nxt, resolved), resolved)
+            nxt = nxt + 1 if nxt + 1 < len(self._queue) else None
+        return None
+
+    @callback
+    def _on_heard(self, tag: int, pos: float) -> None:
+        """From the stream view, as it sends: which track (and where in it) is being heard."""
+        entry = self._mix_tracks.get(tag)
+        if entry is None or self._mix is None:
+            return
+        changed = self._heard is None or self._heard[0] != tag
+        self._heard = (tag, pos)
+        now = self.hass.loop.time()
+        if changed:
+            index, resolved = entry
+            self._index, self._now = index, resolved
+            if 0 <= index < len(self._queue):
+                self._played.add(self._queue[index].video_id)
+                nxt = self._queue[index + 1] if index + 1 < len(self._queue) else None
+                if nxt is not None and nxt.query and not nxt.video_id:
+                    self.hass.async_create_task(self._async_match(nxt))
+        if changed or now - self._heard_written >= 5:
+            self._heard_written = now
+            self._heard_at = dt_util.utcnow()
+            self.async_write_ha_state()
 
     async def _async_mix(self, remaining: float) -> None:
         """Starts the prepared track [crossfade] seconds before this one ends, at full volume:
@@ -710,6 +870,7 @@ class HomeRadioPlayer(MediaPlayerEntity):
     async def async_play_cast(self, video_id: str, position: float = 0, sender: str | None = None) -> ServiceResponse:
         """One track sent by the Home Cast add-on. The phone keeps the queue, so there's no
         autoplay here: the end of the track is reported back with a home_radio_cast event."""
+        self._close_mix()
         self._cast_sender = sender or "YouTube"
         self._query, self._list_id, self._list_name = None, None, None
         self._queue = [YoutubeTrack(video_id, f"https://www.youtube.com/watch?v={video_id}", "", "", 0,
@@ -764,6 +925,7 @@ class HomeRadioPlayer(MediaPlayerEntity):
 
     async def async_media_stop(self) -> None:
         self._end_cast()
+        self._close_mix()
         self._stopping = True
         self._seq += 1
         self._loading = False
@@ -789,6 +951,8 @@ class HomeRadioPlayer(MediaPlayerEntity):
             await self._async_advance(-1)
 
     async def async_media_seek(self, position: float) -> None:
+        if self._mixed and self._now is not None and await self._async_mix_in(self._index, self._now, start_s=position):
+            return  # (the same track again, from there, mixed in quickly)
         await self._send("media_seek", {"seek_position": position})
 
     async def async_set_volume_level(self, volume: float) -> None:
