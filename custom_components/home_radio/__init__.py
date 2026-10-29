@@ -63,11 +63,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # The TV only answers while its app's playback service is up, so this keeps trying gently.
     entry.async_create_background_task(hass, stations.async_sync(), "home_radio_station_sync")
+    async def _sync(_now) -> None:
+        # (a coroutine, so it runs in the event loop; a plain lambda would run in a worker thread)
+        await stations.async_sync()
+
     entry.async_on_unload(
-        async_track_time_interval(
-            hass, lambda _now: hass.async_create_task(stations.async_sync()),
-            timedelta(seconds=STATION_SYNC_INTERVAL_S),
-        )
+        async_track_time_interval(hass, _sync, timedelta(seconds=STATION_SYNC_INTERVAL_S))
     )
     entry.async_on_unload(entry.add_update_listener(_async_reload))
 

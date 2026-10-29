@@ -488,19 +488,17 @@ async def _near_end(hass, position):
 
 async def test_next_track_is_ready_and_mixed_in(hass, calls):
     resolve = patch(f"{MP}.async_resolve", side_effect=_resolved)
-    with patch(f"{MP}.async_search", return_value=_tracks()), resolve as res, patch(f"{MP}.FADE_STEP_S", 0.001), \
-         patch(f"{MP}.FADE_IN_S", 0.01):
+    with patch(f"{MP}.async_search", return_value=_tracks()), resolve as res:
         await hass.services.async_call(DOMAIN, "play_youtube", {"entity_id": ENTITY, "query": "rock"}, blocking=True)
         assert hass.states.get("number.home_radio_crossfade").state == "6"
         await _near_end(hass, 180)  # 20 s left: the next one gets resolved now
         await _tick(hass)
         assert res.call_count == 2
         n_plays = len(plays(calls))
-        await _near_end(hass, 195)  # 5 s left, crossfade is 6: mix
+        await _near_end(hass, 195)  # 5 s left, crossfade is 6: the next one starts now
         await _tick(hass)
         await hass.async_block_till_done()
-        vols = [v for c, v in calls.calls if c == "volume_set"]
-        assert vols and min(vols) < 0.1 and vols[-1] == 0.5  # down, then back up to where it was
+        assert not [c for c in calls.calls if c[0] == "volume_set"]  # the volume is left alone
         assert len(plays(calls)) == n_plays + 1 and last_url(calls) == "https://audio/v1"
         assert res.call_count == 2  # the prepared stream was used, not resolved again
         # the player still shows the old track's position for a moment: no mixing again right away

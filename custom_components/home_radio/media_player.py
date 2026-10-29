@@ -46,11 +46,7 @@ from .const import (
     DEFAULT_TARGET,
     DOMAIN,
     EVENT_CAST,
-    FADE_FLOOR,
-    FADE_IN_S,
-    FADE_STEPS,
     MAX_CROSSFADE_S,
-    FADE_STEP_S,
     KIND_STATION,
     KIND_YOUTUBE,
     PREPARE_AHEAD_S,
@@ -508,47 +504,18 @@ class HomeRadioPlayer(MediaPlayerEntity):
         finally:
             self._preparing = False
 
-    async def _async_volume(self, level: float) -> None:
-        await self._send("volume_set", {ATTR_MEDIA_VOLUME_LEVEL: round(max(0.0, min(1.0, level)), 3)})
-
     async def _async_mix(self, remaining: float) -> None:
-        """Fades the ending track out, starts the prepared one, fades it in."""
-        seq = self._seq
-        start = self.volume_level
-        dlog(self.hass, f"MIX start left={remaining:.1f} vol={start}")
-        if not isinstance(start, (int, float)) or start <= 0:
-            self._mixing = False
-            return
-        floor = start * FADE_FLOOR
+        """Starts the prepared track [crossfade] seconds before this one ends, at full volume:
+        the music never stops (the last seconds of the old track, usually its outro, are left
+        out — a single VLC can't play two tracks at once)."""
+        dlog(self.hass, f"MIX start left={remaining:.1f}")
         try:
-            interval = max(0.05, remaining - 0.3) / FADE_STEPS
-            for i in range(1, FADE_STEPS + 1):
-                if seq != self._seq:
-                    return  # something else was picked: the finally puts the volume back
-                await self._async_volume(start - (start - floor) * i / FADE_STEPS)
-                await asyncio.sleep(interval)
-            if seq != self._seq:
-                return
             await self._async_advance(1, autoplay=True)
-            seq = self._seq
-            for _ in range(20):  # wait for it to actually play
-                tgt = self._tgt
-                if seq != self._seq or (tgt is not None and tgt.state == STATE_PLAYING):
-                    break
-                await asyncio.sleep(FADE_STEP_S)
-            steps = FADE_STEPS // 2
-            for i in range(1, steps + 1):
-                if seq != self._seq:
-                    return
-                await self._async_volume(floor + (start - floor) * i / steps)
-                await asyncio.sleep(FADE_IN_S / steps)
-        except Exception as err:  # noqa: BLE001 - logged, and the volume still goes back
+        except Exception as err:  # noqa: BLE001 - logged; the old track just runs out as usual
             dlog(self.hass, f"MIX failed: {err!r}")
-            _LOGGER.exception("home_radio: crossfade failed")
+            _LOGGER.exception("home_radio: starting the next track early failed")
         finally:
             self._mixing = False
-            if self.volume_level != start:
-                await self._async_volume(start)
 
     async def _async_match(self, track: YoutubeTrack) -> bool:
         """Finds a Spotify song on YouTube: the first result about as long as the song."""

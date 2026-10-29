@@ -241,9 +241,9 @@ class MainActivity : ComponentActivity() {
             Column(Modifier.padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Μίξη τραγουδιών", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                    Text(if (shown == 0) "Χωρίς μίξη" else "$shown″", color = Accent, fontWeight = FontWeight.Bold)
+                    Text(if (shown == 0) "Στο τέλος" else "$shown″ πριν", color = Accent, fontWeight = FontWeight.Bold)
                 }
-                Text("Πόσα δευτερόλεπτα σβήνει το ένα τραγούδι μέσα στο επόμενο. Το επόμενο ετοιμάζεται πάντα από πριν, οπότε ξεκινά χωρίς κενό.",
+                Text("Πόσα δευτερόλεπτα πριν τελειώσει ένα τραγούδι ξεκινά το επόμενο, στην ίδια ένταση, ώστε η μουσική να μη σταματά ποτέ. Το επόμενο ετοιμάζεται πάντα από πριν.",
                     fontSize = 12.sp, color = Color.Gray)
                 Slider(
                     value = dragging ?: current,

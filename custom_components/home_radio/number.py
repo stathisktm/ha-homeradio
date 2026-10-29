@@ -1,5 +1,5 @@
-"""How many seconds one YouTube track fades into the next (0 turns it off). The next track is
-always made ready ahead of time, so even at 0 there's barely a gap."""
+"""How many seconds before a YouTube track ends the next one starts (0: when it ends). The next
+track is always made ready ahead of time, so even at 0 there's barely a gap."""
 
 from __future__ import annotations
 

@@ -33,19 +33,13 @@ SERVICE_GET_LIST = "get_list"
 SERVICE_SET_CROSSFADE = "set_crossfade"
 
 # Mixing YouTube tracks: the next one is resolved this long before the current one ends (so it
-# starts at once), then the last DEFAULT_CROSSFADE_S fade out and the new one fades in.
+# starts at once), and starts DEFAULT_CROSSFADE_S before the end, so the music never pauses.
 DEFAULT_CROSSFADE_S = 6
 MAX_CROSSFADE_S = 12
 PREPARE_AHEAD_S = 25
 PREPARED_MAX_AGE_S = 300
 # Right after a track starts the player may still report the last one's position: not trusted.
 SETTLE_S = 15
-# The fade goes down to this share of the volume; the new track comes up from it.
-FADE_FLOOR = 0.15
-FADE_STEP_S = 0.25
-# Volume changes per fade, however long it is (each is one command to VLC).
-FADE_STEPS = 16
-FADE_IN_S = 2.5
 
 # A Spotify song is matched to the first YouTube result this close to its length.
 SPOTIFY_MATCH_RESULTS = 6

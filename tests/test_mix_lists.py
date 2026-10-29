@@ -57,7 +57,6 @@ async def test_mix_with_vlc_like_polling(hass, aioclient_mock, calls, freezer): 
         await hass.services.async_call(DOMAIN, "play_spotify", {
             "entity_id": ENTITY, "url": "https://open.spotify.com/album/4LH4d3cOWNNsVw41Gqt2kv"}, blocking=True)
         await hass.async_block_till_done()
-        fake = hass.data["fake_vlc"]
         start = dt_util.utcnow()
         await _target(hass, "playing", media_duration=169, media_position=0, media_position_updated_at=start)
         n_plays, log = len(plays(calls)), []
@@ -73,7 +72,6 @@ async def test_mix_with_vlc_like_polling(hass, aioclient_mock, calls, freezer): 
                               media_position_updated_at=dt_util.utcnow())
             if sec >= 169:
                 await _target(hass, "idle")
-        vols = [v for c, v in calls.calls if c == "volume_set"]
-        print("log", log, "vols", vols[:3], "...", len(vols), "resolves", res.call_count)
-        assert log and log[0][1] < 169, "the next song should start before the old one ran out"
-        assert vols, "it should have faded"
+        assert log and 160 <= log[0][1] < 169, f"the next song should start ~6 s before the end: {log}"
+        assert not [c for c in calls.calls if c[0] == "volume_set"]
+        assert res.call_count == 2  # first song + the prepared one
