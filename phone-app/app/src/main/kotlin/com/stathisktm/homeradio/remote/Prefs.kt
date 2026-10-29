@@ -23,11 +23,6 @@ class Prefs(context: Context) {
         get() = prefs.getBoolean(KEY_VOLUME_KEYS, true)
         set(value) = prefs.edit().putBoolean(KEY_VOLUME_KEYS, value).apply()
 
-    /** The "turn on the volume-keys service" card was closed. */
-    var volumeKeysHintHidden: Boolean
-        get() = prefs.getBoolean(KEY_VOLUME_HINT_HIDDEN, false)
-        set(value) = prefs.edit().putBoolean(KEY_VOLUME_HINT_HIDDEN, value).apply()
-
     val isConfigured: Boolean get() = haUrl.isNotBlank() && token.isNotBlank() && entityId.isNotBlank()
 
     companion object {
@@ -37,6 +32,5 @@ class Prefs(context: Context) {
         private const val KEY_TOKEN = "token"
         private const val KEY_ENTITY = "entity_id"
         private const val KEY_VOLUME_KEYS = "volume_keys"
-        private const val KEY_VOLUME_HINT_HIDDEN = "volume_keys_hint_hidden"
     }
 }

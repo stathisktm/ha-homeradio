@@ -30,6 +30,7 @@ SERVICE_PLAY_CAST = "play_cast"
 SERVICE_PLAY_SPOTIFY = "play_spotify"
 SERVICE_REMOVE_LIST = "remove_list"
 SERVICE_GET_LIST = "get_list"
+SERVICE_SET_CROSSFADE = "set_crossfade"
 
 # Mixing YouTube tracks: the next one is resolved this long before the current one ends (so it
 # starts at once), then the last DEFAULT_CROSSFADE_S fade out and the new one fades in.

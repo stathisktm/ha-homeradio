@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
@@ -15,6 +16,8 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.items as rowItems
@@ -39,7 +42,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -167,6 +170,11 @@ class MainActivity : ComponentActivity() {
         var showSettings by rememberSaveable { mutableStateOf(!prefs.isConfigured) }
         var openList by remember { mutableStateOf<JsonObject?>(null) }
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            if (showSettings) {
+                BackHandler(enabled = prefs.isConfigured) { showSettings = false }
+                SettingsScreen(prefs, s, canClose = prefs.isConfigured) { showSettings = false }
+                return@Surface
+            }
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(96.dp),
                 modifier = Modifier.safeDrawingPadding().padding(horizontal = 16.dp),
@@ -176,11 +184,15 @@ class MainActivity : ComponentActivity() {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text("Home Radio", fontSize = 24.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                        Text(status, color = if (status == "Συνδέθηκε") Accent else Color(0xFFFFB74D), fontSize = 13.sp)
-                        IconButton(onClick = { showSettings = !showSettings }) { Icon(Icons.Default.Settings, "Ρυθμίσεις") }
+                        // Just a dot when all is well; words only when something's wrong.
+                        if (status == "Συνδέθηκε") {
+                            Box(Modifier.size(10.dp).clip(RoundedCornerShape(5.dp)).background(Color(0xFF66BB6A)))
+                        } else {
+                            Text(status, color = Color(0xFFFFB74D), fontSize = 13.sp)
+                        }
+                        IconButton(onClick = { showSettings = true }) { Icon(Icons.Default.Settings, "Ρυθμίσεις") }
                     }
                 }
-                if (showSettings) item(span = { GridItemSpan(maxLineSpan) }) { Settings(prefs) { showSettings = false } }
                 item(span = { GridItemSpan(maxLineSpan) }) { NowPlaying(s) }
                 val queue = queueOf(s)
                 if (queue.size > 1) item(span = { GridItemSpan(maxLineSpan) }) { QueueCard(queue, s?.num("queue_index")?.toInt() ?: -1) }
@@ -189,7 +201,6 @@ class MainActivity : ComponentActivity() {
                     val lists = st.list("saved_lists").orEmpty().mapNotNull { it as? JsonObject }
                     item(span = { GridItemSpan(maxLineSpan) }) { SavedLists(lists, st.str("queue_list_id")) { openList = it } }
                 }
-                item(span = { GridItemSpan(maxLineSpan) }) { VolumeKeys(prefs) }
                 val stations = s?.list("stations").orEmpty().mapNotNull { it as? JsonObject }
                 if (stations.isNotEmpty()) {
                     item(span = { GridItemSpan(maxLineSpan) }) {
@@ -201,6 +212,50 @@ class MainActivity : ComponentActivity() {
             }
         }
         openList?.let { l -> ListSheet(l) { openList = null } }
+    }
+
+    /** Everything that isn't playing music: the mix, the volume keys, the connection. */
+    @Composable
+    private fun SettingsScreen(prefs: Prefs, s: EntityState?, canClose: Boolean, onClose: () -> Unit) {
+        Column(Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (canClose) IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Πίσω") }
+                Text("Ρυθμίσεις", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            }
+            if (s != null) Crossfade(s)
+            VolumeKeys(prefs)
+            Settings(prefs) { if (prefs.isConfigured) onClose() }
+            Text("Home Radio Remote ${BuildConfig.VERSION_NAME}", fontSize = 12.sp, color = Color.Gray,
+                modifier = Modifier.align(Alignment.CenterHorizontally).padding(vertical = 16.dp))
+        }
+    }
+
+    /** How many seconds one song fades into the next (Home Radio's crossfade). */
+    @Composable
+    private fun Crossfade(s: EntityState) {
+        val current = (s.num("crossfade") ?: 6.0).toFloat()
+        var dragging by remember { mutableStateOf<Float?>(null) }
+        val shown = (dragging ?: current).toInt()
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+            Column(Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Μίξη τραγουδιών", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    Text(if (shown == 0) "Χωρίς μίξη" else "$shown″", color = Accent, fontWeight = FontWeight.Bold)
+                }
+                Text("Πόσα δευτερόλεπτα σβήνει το ένα τραγούδι μέσα στο επόμενο. Το επόμενο ετοιμάζεται πάντα από πριν, οπότε ξεκινά χωρίς κενό.",
+                    fontSize = 12.sp, color = Color.Gray)
+                Slider(
+                    value = dragging ?: current,
+                    onValueChange = { dragging = it },
+                    onValueChangeFinished = {
+                        dragging?.let { HaHub.call("home_radio", "set_crossfade", mapOf("seconds" to it.toInt())) }
+                        dragging = null
+                    },
+                    valueRange = 0f..12f, steps = 11,
+                )
+            }
+        }
     }
 
     @Composable
@@ -451,13 +506,11 @@ class MainActivity : ComponentActivity() {
     private fun VolumeKeys(prefs: Prefs) {
         var enabled by remember { mutableStateOf(VolumeKeyService.isEnabled(this)) }
         var wanted by remember { mutableStateOf(prefs.volumeKeys) }
-        var hidden by remember { mutableStateOf(prefs.volumeKeysHintHidden) }
         // Re-check when coming back from the system's accessibility settings.
         LifecycleResumeEffect(Unit) {
             enabled = VolumeKeyService.isEnabled(this@MainActivity)
             onPauseOrDispose { }
         }
-        if (!enabled && hidden) return
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
             Column(Modifier.padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -469,11 +522,7 @@ class MainActivity : ComponentActivity() {
                             fontSize = 12.sp, color = Color.Gray,
                         )
                     }
-                    if (enabled) {
-                        Switch(checked = wanted, onCheckedChange = { wanted = it; prefs.volumeKeys = it })
-                    } else {
-                        IconButton(onClick = { hidden = true; prefs.volumeKeysHintHidden = true }) { Icon(Icons.Default.Close, "Κλείσιμο") }
-                    }
+                    if (enabled) Switch(checked = wanted, onCheckedChange = { wanted = it; prefs.volumeKeys = it })
                 }
                 if (!enabled) {
                     TextButton(onClick = {

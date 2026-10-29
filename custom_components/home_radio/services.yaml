@@ -78,6 +78,20 @@ get_list:
       example: Today's Top Hits
       selector:
         text:
+set_crossfade:
+  target:
+    entity:
+      integration: home_radio
+      domain: media_player
+  fields:
+    seconds:
+      required: true
+      example: 6
+      selector:
+        number:
+          min: 0
+          max: 12
+          unit_of_measurement: s
 remove_list:
   target:
     entity:

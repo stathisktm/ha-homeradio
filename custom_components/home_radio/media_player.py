@@ -49,6 +49,7 @@ from .const import (
     FADE_FLOOR,
     FADE_IN_S,
     FADE_STEPS,
+    MAX_CROSSFADE_S,
     FADE_STEP_S,
     KIND_STATION,
     KIND_YOUTUBE,
@@ -63,6 +64,7 @@ from .const import (
     SERVICE_REMOVE_LIST,
     SERVICE_PLAY_YOUTUBE,
     SERVICE_SEARCH_YOUTUBE,
+    SERVICE_SET_CROSSFADE,
     SPOTIFY_MATCH_RESULTS,
     SPOTIFY_MATCH_TOLERANCE_S,
     YT_MORE_SIZE,
@@ -148,6 +150,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         SERVICE_GET_LIST, {vol.Required("list"): cv.string}, "async_get_list",
         supports_response=SupportsResponse.ONLY,
     )
+    platform.async_register_entity_service(
+        SERVICE_SET_CROSSFADE, {vol.Required("seconds"): vol.All(vol.Coerce(float), vol.Range(min=0, max=MAX_CROSSFADE_S))},
+        "async_set_crossfade",
+    )
 
 
 class HomeRadioPlayer(MediaPlayerEntity):
@@ -189,6 +195,9 @@ class HomeRadioPlayer(MediaPlayerEntity):
         self._list_name: str | None = None
         # Mixing into the next track (set by the crossfade number entity).
         self.crossfade_s: float = DEFAULT_CROSSFADE_S
+        # Set by the crossfade number entity, so a change made here shows there too.
+        self.on_crossfade_change: Any = None
+        self._tick_logged = 0.0
         self._prepared: tuple[int, str, ResolvedAudio, float] | None = None  # index, video, audio, when
         self._preparing = False
         self._mixing = False
@@ -352,6 +361,7 @@ class HomeRadioPlayer(MediaPlayerEntity):
             ],
             "target": self._target,
             "cast_sender": self._cast_sender,
+            "crossfade": self.crossfade_s,
             "queue_name": self._list_name if self._kind == KIND_YOUTUBE else None,
             "queue_list_id": self._list_id if self._kind == KIND_YOUTUBE else None,
             "saved_lists": self._playlists.summary(),
@@ -403,7 +413,10 @@ class HomeRadioPlayer(MediaPlayerEntity):
         if (prepared is not None and prepared[0] == index and prepared[1] == track.video_id
                 and self.hass.loop.time() - prepared[3] < PREPARED_MAX_AGE_S):
             resolved = prepared[2]  # made ready while the previous track played
+            dlog(self.hass, f"USE prepared #{index} {track.video_id}")
         else:
+            if prepared is not None:
+                dlog(self.hass, f"PREPARED unused: had #{prepared[0]} {prepared[1]}, now #{index} {track.video_id}")
             found = await self._async_match(track)
             resolved = await async_resolve(self.hass, track.url) if found and seq == self._seq else None
         if seq != self._seq:
@@ -468,6 +481,13 @@ class HomeRadioPlayer(MediaPlayerEntity):
         if nxt is None:
             return
         ready = self._prepared is not None and self._prepared[0] == nxt
+        if remaining <= PREPARE_AHEAD_S and self.hass.loop.time() - self._tick_logged >= 2:
+            self._tick_logged = self.hass.loop.time()
+            tgt = self._tgt
+            dlog(self.hass, f"TICK left={remaining:.1f} next={nxt} ready={ready} mix={self.crossfade_s} "
+                            f"dur={self.media_duration} vlc_pos={tgt.attributes.get('media_position') if tgt else None} "
+                            f"vlc_at={tgt.attributes.get('media_position_updated_at') if tgt else None!r} "
+                            f"vol={self.volume_level}")
         if remaining <= PREPARE_AHEAD_S and not ready and not self._preparing:
             self.hass.async_create_task(self._async_prepare(nxt))
         elif ready and self.crossfade_s > 0 and remaining <= self.crossfade_s:
@@ -495,6 +515,7 @@ class HomeRadioPlayer(MediaPlayerEntity):
         """Fades the ending track out, starts the prepared one, fades it in."""
         seq = self._seq
         start = self.volume_level
+        dlog(self.hass, f"MIX start left={remaining:.1f} vol={start}")
         if not isinstance(start, (int, float)) or start <= 0:
             self._mixing = False
             return
@@ -521,6 +542,9 @@ class HomeRadioPlayer(MediaPlayerEntity):
                     return
                 await self._async_volume(floor + (start - floor) * i / steps)
                 await asyncio.sleep(FADE_IN_S / steps)
+        except Exception as err:  # noqa: BLE001 - logged, and the volume still goes back
+            dlog(self.hass, f"MIX failed: {err!r}")
+            _LOGGER.exception("home_radio: crossfade failed")
         finally:
             self._mixing = False
             if self.volume_level != start:
@@ -701,6 +725,12 @@ class HomeRadioPlayer(MediaPlayerEntity):
                 for s, vid in self._playlists.songs(saved)
             ],
         }
+
+    async def async_set_crossfade(self, seconds: float) -> None:
+        self.crossfade_s = float(seconds)
+        if self.on_crossfade_change is not None:
+            self.on_crossfade_change(self.crossfade_s)
+        self.async_write_ha_state()
 
     async def async_remove_list(self, list: str) -> None:  # noqa: A002 - the service field's name
         saved = self._playlists.find(list)
