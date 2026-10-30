@@ -792,7 +792,7 @@ class HomeRadioPlayer(MediaPlayerEntity):
             await self._async_start_list(saved)
             return
         dlog(self.hass, f"SPOTIFY {found.kind} {found.name!r}: {len(found.songs)} songs")
-        if list_id and found.kind in ("playlist", "album"):
+        if list_id and found.kind in ("playlist", "album", "youtube"):
             # Kept for next time (a single song isn't worth a place among the lists).
             await self._async_start_list(self._playlists.save(list_id, url, found))
             return

@@ -18,6 +18,8 @@ _LOGGER = logging.getLogger(__name__)
 # open.spotify.com/[intl-xx/]playlist/<id>, spotify:album:<id>, spotify.link short links aren't
 # expanded (they redirect through an app page), so those are asked to be opened in full.
 _LINK = re.compile(r"(?:open\.spotify\.com/(?:intl-[a-z-]+/)?|spotify:)(playlist|album|track)[/:]([A-Za-z0-9]{22})")
+# YouTube / YouTube Music playlists, albums and mixes: any link carrying list=.
+_YT_LIST = re.compile(r"(?:youtube\.com|youtu\.be)\S*?[?&]list=([A-Za-z0-9_-]{10,})")
 _NEXT_DATA = re.compile(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.S)
 EMBED_URL = "https://open.spotify.com/embed/{kind}/{id}"
 FETCH_TIMEOUT_S = 20
@@ -28,6 +30,7 @@ class SpotifySong:
     title: str
     artists: str
     duration: int  # seconds, 0 if unknown
+    video_id: str = ""  # known already for a song from a YouTube list
 
     @property
     def query(self) -> str:
@@ -46,7 +49,10 @@ def parse_link(text: str) -> tuple[str, str] | None:
     """(kind, id) of a Spotify playlist/album/track link anywhere in the text — a shared message
     like "Listen to X on Spotify: https://open.spotify.com/…" works too."""
     m = _LINK.search(text or "")
-    return (m.group(1), m.group(2)) if m else None
+    if m:
+        return (m.group(1), m.group(2))
+    m = _YT_LIST.search(text or "")
+    return ("ytlist", m.group(1)) if m else None
 
 
 def is_link(text: str) -> bool:
@@ -86,6 +92,15 @@ async def async_fetch(hass: HomeAssistant, text: str) -> SpotifyList | None:
     if link is None:
         return None
     kind, item_id = link
+    if kind == "ytlist":
+        from .youtube import async_playlist
+
+        found = await async_playlist(hass, item_id)
+        if not found or not found[1]:
+            return None
+        name, videos = found
+        return SpotifyList("youtube", name, videos[0].thumbnail,
+                           [SpotifySong(v.title, v.channel, v.duration, v.video_id) for v in videos])
     session = async_get_clientsession(hass)
     try:
         async with session.get(

@@ -169,7 +169,7 @@ class HomeRadioCard extends HTMLElement {
         <div class="tabs">${this._config.tabs.map((t) => `<button data-tab="${t}">${tabNames[t] || t}</button>`).join("")}</div>
         <div class="pane" data-pane="stations"></div>
         <div class="pane" data-pane="youtube">
-          <form class="searchbox"><input placeholder="Αναζήτηση στο YouTube ή link Spotify…" enterkeyhint="search"><button>${svg(ICONS.search, 22)}</button></form>
+          <form class="searchbox"><input placeholder="Αναζήτηση, ή link λίστας Spotify / YouTube…" enterkeyhint="search"><button>${svg(ICONS.search, 22)}</button></form>
           <div class="recent"></div><div class="list results"><div class="muted">Γράψε καλλιτέχνη, τραγούδι ή είδος.</div></div>
         </div>
         <div class="pane" data-pane="lists"></div>
@@ -233,8 +233,8 @@ class HomeRadioCard extends HTMLElement {
   async _search(q) {
     q = (q || "").trim();
     if (!q) return;
-    if (/open\.spotify\.com\/|spotify:(playlist|album|track):/.test(q)) {
-      // A Spotify link: play it as the queue.
+    if (/open\.spotify\.com\/|spotify:(playlist|album|track):|(youtube\.com|youtu\.be)\S*[?&]list=/.test(q)) {
+      // A Spotify link, or a YouTube / YouTube Music list: play it as the queue (and keep it).
       this.$(".searchbox input").value = "";
       this._call("home_radio.play_spotify", { url: q });
       if (this._config.tabs.includes("queue")) { this._tab = "queue"; this._update(); }

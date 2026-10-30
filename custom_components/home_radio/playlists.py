@@ -63,7 +63,7 @@ class PlaylistStore:
             "name": found.name or "Spotify",
             "image": found.image or (self._lists.get(list_id) or {}).get("image", ""),
             "songs": [{"title": s.title, "artists": s.artists, "duration": s.duration,
-                       "video_id": old.get((s.title, s.artists), "")} for s in found.songs],
+                       "video_id": s.video_id or old.get((s.title, s.artists), "")} for s in found.songs],
             "played": time.time(),
         }
         self._lists[list_id] = entry

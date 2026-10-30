@@ -545,3 +545,24 @@ async def test_saved_list_songs_and_start_from_a_chosen_one(hass, aioclient_mock
             "media_content_type": "playlist"}, blocking=True)
         st = hass.states.get(ENTITY)
         assert st.attributes["queue_index"] == 0 and len(st.attributes["queue"]) == 3
+
+
+async def test_youtube_music_list_plays_and_is_kept(hass, calls):
+    videos = _tracks(4, "m")
+    with patch("custom_components.home_radio.youtube.async_playlist", return_value=("Καλοκαίρι 2026", videos)) as pl, \
+         patch(f"{MP}.async_search") as srch, patch(f"{MP}.async_resolve", side_effect=_resolved):
+        # pasted in the search box / shared from the YouTube Music app
+        await hass.services.async_call(DOMAIN, "play_youtube", {
+            "entity_id": ENTITY, "query": "https://music.youtube.com/playlist?list=OLAK5uy_abcdefghijk&si=x"}, blocking=True)
+        assert pl.call_args.args[1] == "OLAK5uy_abcdefghijk"
+        assert last_url(calls) == "https://audio/m0"
+        assert not srch.called  # the videos are known: nothing to look up
+        st = hass.states.get(ENTITY)
+        assert st.attributes["queue_name"] == "Καλοκαίρι 2026" and len(st.attributes["queue"]) == 4
+        saved = st.attributes["saved_lists"]
+        assert saved[0]["id"] == "ytlist:OLAK5uy_abcdefghijk" and saved[0]["count"] == 4 and saved[0]["kind"] == "youtube"
+        # from the Lists later: starts from the chosen song, still no searching
+        await hass.services.async_call("media_player", "play_media", {
+            "entity_id": ENTITY, "media_content_id": "list:ytlist:OLAK5uy_abcdefghijk@2",
+            "media_content_type": "playlist"}, blocking=True)
+        assert last_url(calls) == "https://audio/m2" and not srch.called

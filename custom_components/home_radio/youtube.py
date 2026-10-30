@@ -111,6 +111,38 @@ def _resolve(url: str) -> ResolvedAudio | None:
     )
 
 
+def _playlist(list_id: str, size: int) -> tuple[str, list[YoutubeTrack]] | None:
+    """A YouTube / YouTube Music playlist, album or mix: its name and up to [size] videos."""
+    import yt_dlp
+
+    opts = {"quiet": True, "no_warnings": True, "extract_flat": True, "skip_download": True, "playlistend": size}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(f"https://www.youtube.com/playlist?list={list_id}", download=False)
+    if not info:
+        return None
+    tracks = [
+        YoutubeTrack(
+            video_id=e["id"],
+            url=f"https://www.youtube.com/watch?v={e['id']}",
+            title=e.get("title") or "",
+            channel=e.get("channel") or e.get("uploader") or "",
+            duration=int(e.get("duration") or 0),
+            thumbnail=_thumb(e["id"]),
+        )
+        for e in info.get("entries") or []
+        if e and e.get("id") and e.get("title") not in ("[Private video]", "[Deleted video]")
+    ]
+    return (info.get("title") or "YouTube"), tracks
+
+
+async def async_playlist(hass: HomeAssistant, list_id: str, size: int = 300) -> tuple[str, list[YoutubeTrack]] | None:
+    try:
+        return await hass.async_add_executor_job(_playlist, list_id, size)
+    except Exception:  # noqa: BLE001 - private/removed lists: just "couldn't read it"
+        _LOGGER.warning("home_radio: could not read YouTube list %s", list_id, exc_info=True)
+        return None
+
+
 async def async_search(hass: HomeAssistant, query: str, size: int) -> list[YoutubeTrack]:
     try:
         return await hass.async_add_executor_job(_search, query, size)
